@@ -7,16 +7,16 @@ The software is free and MIT-licensed. The optional AI workflow guide and prompt
 ## What it does
 
 - Searches current YouTube live results for a phrase such as `GTA 6` and prints machine-readable JSON for AI agents.
-- Records a live source in rolling chunks, then ranks windows by audio peaks, speech density, and reaction words.
+- Records a live source in rolling chunks, then ranks windows by audio peaks and stronger reaction phrases; repeated filler words such as “oh no” do not count as strong reactions.
 - Starts clips a few seconds before the strongest audio peak (6 seconds by default).
-- Keeps the horizontal gameplay centered in the vertical frame; a blurred source frame fills the space above and below.
+- Preserves the full source frame by default, with a blurred fill. The optional `--crop` mode samples frames for facecams and shifts a vertical crop away from a persistent side facecam. It can also isolate gameplay below/above a facecam in a stacked portrait layout; uncertain detections fall back to the full source frame.
 - Resets audio and video timestamps before burning word-timed captions.
 - Saves MP4 and JSON metadata in `output/`. It never posts as part of clipping.
 - Schedules one reviewed clip to YouTube and Instagram through Zernio; dry-run is the default.
 
 ## Install
 
-Requirements: Python 3.10+, FFmpeg in PATH, and a stable connection for first-run model downloads.
+Requirements: Python 3.10+, FFmpeg in PATH, OpenCV for `--crop` face detection, and a stable connection for first-run speech-model downloads.
 
 ```powershell
 python -m venv .venv
@@ -50,7 +50,8 @@ Important options:
 | `--clip-len` | `30` | Rendered highlight length |
 | `--lead-in` | `6` | Seconds before the strongest audio peak |
 | `--top` | `1` | Highlights kept from each chunk |
-| `--min-score` | `1.5` | Minimum moment score |
+| `--min-score` | `2.5` | Minimum moment score |
+| `--crop` | off | Detect a persistent facecam and frame gameplay away from it; default framing keeps the full source visible |
 | `--output-dir` | `output/` | Custom destination folder |
 
 Test a local video first. Test output goes to `test_out/` and cannot be published:

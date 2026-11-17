@@ -2,7 +2,7 @@
 
 This command only records/renders. It never uploads or publishes.
 """
-import argparse, glob, json, os, re, shutil, subprocess, sys, time
+import argparse, glob, json, math, os, re, shutil, subprocess, sys, time
 from datetime import datetime
 import numpy as np
 
@@ -11,9 +11,16 @@ OUTPUT_DIR = os.path.join(HERE, "output")
 TEST_OUT = os.path.join(HERE, "test_out")
 WORK = os.path.join(HERE, "work")
 DEFAULT_MAX_SECONDS = 0
-EXCITED = {"oh", "wow", "no", "what", "bro", "dude", "crazy", "insane", "holy", "wait", "omg",
-           "god", "damn", "shit", "fuck", "yes", "yo", "look", "watch", "run", "help", "dead",
-           "cops", "police", "crash", "explode", "boom", "chase", "scary", "unbelievable"}
+STRONG_REACTIONS = {"wow", "crazy", "insane", "shit", "fuck", "fucking", "damn", "unbelievable",
+                    "ridiculous", "nuts", "wild", "sick", "amazing", "brilliant"}
+GAME_EVENTS = {"crash", "crashed", "explode", "exploded", "boom", "chase", "chasing", "wreck", "wrecked"}
+REACTION_PHRASES = {
+    ("oh", "my", "god"): 1.2, ("holy", "shit"): 1.5, ("holy", "crap"): 1.2,
+    ("no", "way"): 1.4, ("what", "the", "hell"): 1.3, ("are", "you", "kidding"): 1.4,
+    ("what", "just", "happened"): 1.0, ("no", "fucking", "way"): 2.0,
+}
+DEFAULT_MIN_SCORE = 2.5
+FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 
 
 def run(cmd, **kw):
@@ -83,6 +90,20 @@ def rms_series(x, hop=0.25):
     return 20 * np.log10(np.sqrt((x[:k * n].reshape(k, n) ** 2).mean(1)) + 1e-6)
 
 
+def reaction_score(words):
+    """Score distinct high-energy words and phrases, not repeated filler like 'oh no'."""
+    tokens = [re.sub(r"\W", "", word.lower()) for _, _, word in words]
+    tokens = [word for word in tokens if word]
+    phrase_points = 0.0
+    for phrase, weight in REACTION_PHRASES.items():
+        size = len(phrase)
+        if any(tuple(tokens[index:index + size]) == phrase for index in range(len(tokens) - size + 1)):
+            phrase_points += weight
+    strong = len(set(tokens) & STRONG_REACTIONS)
+    events = len(set(tokens) & GAME_EVENTS)
+    return round(min(3.0, phrase_points + min(strong, 3) * 0.45 + min(events, 2) * 0.25), 2)
+
+
 def select_clip_start(anchor, lead_in, clip_len, duration):
     latest = max(0.0, duration - clip_len)
     return round(min(max(0.0, anchor - lead_in), latest), 2)
@@ -107,8 +128,12 @@ def pick_moments(chunk_path, clip_len, top, min_score, lead_in=6):
         loud = seg[-max(3, len(seg) // 10):].mean()
         ws = [w for w in words if start <= w[0] < start + clip_len]
         density = len(ws) / clip_len
-        hits = min(6, sum(1 for w in ws if re.sub(r"\W", "", w[2].lower()) in EXCITED))
-        cands.append((0.5 * loud + 2.0 * density + 0.4 * hits, start))
+        reaction = reaction_score(ws)
+        # A loud or talkative stretch alone is weak evidence of a shareable moment.
+        score = 0.45 * loud + 0.2 * min(density, 4.0) + 1.2 * reaction
+        if reaction == 0:
+            score *= 0.45
+        cands.append((score, start))
     cands.sort(reverse=True)
     chosen = []
     for score, start in cands:
@@ -151,19 +176,151 @@ def write_ass(path, words, start, length, credit):
     open(path, "w", encoding="utf-8").write(head + "\n".join(ev) + "\n")
 
 
-def build_video_filter(ass_name, crop=False):
+def choose_crop_offset(frame_width, frame_height, face_samples):
+    """Return a normalized horizontal crop offset that avoids a persistent side facecam."""
+    if frame_width <= 0 or frame_height <= 0:
+        return 0.5
+    crop_width = frame_height * 9 / 16
+    available = frame_width - crop_width
+    if available <= 0:
+        return 0.5
+
+    left_frames, right_frames = [], []
+    for detections in face_samples:
+        left = [box for box in detections if (box[0] + box[2] / 2) < frame_width * 0.38]
+        right = [box for box in detections if (box[0] + box[2] / 2) > frame_width * 0.62]
+        if left:
+            left_frames.append(left)
+        if right:
+            right_frames.append(right)
+
+    threshold = max(3, math.ceil(len(face_samples) * 0.3))
+    if len(left_frames) >= threshold and len(right_frames) < threshold:
+        return 1.0
+    if len(right_frames) >= threshold and len(left_frames) < threshold:
+        return 0.0
+    return 0.5
+
+
+def choose_vertical_game_roi(frame_width, frame_height, face_samples, active_bottom=None):
+    """Find gameplay below/above a persistent facecam in stacked portrait streams."""
+    if frame_width <= 0 or frame_height <= 0 or frame_width / frame_height > 0.75:
+        return None
+    top_frames, bottom_frames = [], []
+    for detections in face_samples:
+        top = [box for box in detections if (box[1] + box[3] / 2) < frame_height * 0.3]
+        bottom = [box for box in detections if (box[1] + box[3] / 2) > frame_height * 0.7]
+        if top:
+            top_frames.append(top)
+        if bottom:
+            bottom_frames.append(bottom)
+    threshold = max(3, math.ceil(len(face_samples) * 0.3))
+    if len(top_frames) >= threshold and len(bottom_frames) < threshold:
+        face_bottom = max(box[1] + box[3] for sample in top_frames for box in sample)
+        y0 = max(int(frame_height * 0.14), int(face_bottom + frame_height * 0.05))
+        y1 = active_bottom if active_bottom and active_bottom <= frame_height else frame_height
+    elif len(bottom_frames) >= threshold and len(top_frames) < threshold:
+        face_top = min(box[1] for sample in bottom_frames for box in sample)
+        y0 = 0
+        y1 = min(int(frame_height * 0.86), int(face_top - frame_height * 0.05))
+    else:
+        return None
+    if y1 - y0 < frame_height * 0.3:
+        return None
+    return 0, y0, frame_width, y1 - y0
+
+
+def should_apply_smart_crop(requested, crop_offset, source_roi):
+    """Only crop when facecam evidence supports it; otherwise preserve the full source."""
+    return bool(requested and (source_roi is not None or abs(float(crop_offset) - 0.5) > 0.01))
+
+
+def detect_smart_frame(video_path, start, length, sample_count=9):
+    """Detect a persistent facecam and return a safe horizontal offset or gameplay ROI."""
+    try:
+        import cv2
+    except ImportError:
+        return 0.5, None
+
+    if not os.path.isfile(FACE_MODEL):
+        return 0.5, None
+    try:
+        detector = cv2.FaceDetectorYN.create(FACE_MODEL, "", (320, 320), 0.8, 0.3, 5000)
+    except cv2.error:
+        return 0.5, None
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return 0.5, None
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    samples = []
+    bottom_black_ratios = []
+    try:
+        for fraction in np.linspace(0.1, 0.9, sample_count):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (start + length * fraction) * 1000)
+            ok, frame = cap.read()
+            detections = []
+            if ok and frame is not None:
+                original_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                bottom_black_ratios.append(np.mean(original_gray < 12, axis=1))
+                scale = min(320 / frame_width, 320 / frame_height)
+                resized = cv2.resize(frame, (round(frame_width * scale), round(frame_height * scale)),
+                                     interpolation=cv2.INTER_AREA)
+                canvas = np.zeros((320, 320, 3), dtype=np.uint8)
+                pad_x = (320 - resized.shape[1]) // 2
+                pad_y = (320 - resized.shape[0]) // 2
+                canvas[pad_y:pad_y + resized.shape[0], pad_x:pad_x + resized.shape[1]] = resized
+                _, faces = detector.detect(canvas)
+                factor = 1.0 / scale
+                for face in (faces if faces is not None else []):
+                    x, y, w, h = face[:4]
+                    x, y, w, h = int(x), int(y), int(w), int(h)
+                    box = (int((x - pad_x) * factor), int((y - pad_y) * factor), int(w * factor), int(h * factor))
+                    box = (max(0, box[0]), max(0, box[1]), min(frame_width, box[0] + box[2]) - max(0, box[0]),
+                           min(frame_height, box[1] + box[3]) - max(0, box[1]))
+                    if box[2] <= 0 or box[3] <= 0:
+                        continue
+                    center_x = box[0] + box[2] / 2
+                    center_y = box[1] + box[3] / 2
+                    if center_x < frame_width * 0.38 or center_x > frame_width * 0.62 or frame_width / frame_height <= 0.75:
+                        detections.append(box)
+            samples.append(detections)
+    finally:
+        cap.release()
+    active_bottom = frame_height
+    if bottom_black_ratios:
+        black_ratio = np.mean(np.stack(bottom_black_ratios), axis=0)
+        row = frame_height - 1
+        while row >= 0 and black_ratio[row] >= 0.98:
+            row -= 1
+        if frame_height - 1 - row >= frame_height * 0.03:
+            active_bottom = row + 1
+    roi = choose_vertical_game_roi(frame_width, frame_height, samples, active_bottom)
+    return choose_crop_offset(frame_width, frame_height, samples), roi
+
+
+def build_video_filter(ass_name, crop=False, crop_offset=0.5, source_roi=None):
+    if crop and source_roi:
+        x, y, width, height = source_roi
+        return (f"[0:v]crop={width}:{height}:{x}:{y},split[a][b];"
+                "[a]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass={ass_name}")
     if crop:
-        return f"[0:v]scale=-2:1920,crop=1080:1920,setpts=PTS-STARTPTS,ass={ass_name}"
+        offset = min(1.0, max(0.0, float(crop_offset)))
+        return ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920:(iw-1080)*{offset:.4f}:(ih-1920)/2,"
+                f"setpts=PTS-STARTPTS,ass={ass_name}")
     return ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass=" + ass_name)
 
 
-def cut(chunk_path, words, start, length, out_mp4, credit, crop=False):
+def cut(chunk_path, words, start, length, out_mp4, credit, crop=False, crop_offset=0.5, source_roi=None):
     d = os.path.dirname(out_mp4)
     ass_name = "cap_" + os.path.basename(out_mp4) + ".ass"
     write_ass(os.path.join(d, ass_name), words, start, length, credit)
-    fg = build_video_filter(ass_name, crop=crop)
+    fg = build_video_filter(ass_name, crop=crop, crop_offset=crop_offset, source_roi=source_roi)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}",
                         "-i", os.path.abspath(chunk_path), "-t", f"{length}",
                         "-filter_complex", fg, "-af", "asetpts=PTS-STARTPTS",
@@ -190,8 +347,8 @@ def main():
     ap.add_argument("--lead-in", type=float, default=6,
                     help="seconds before the strongest audio peak to start each clip")
     ap.add_argument("--top", type=int, default=1, help="clips per chunk")
-    ap.add_argument("--crop", action="store_true", help="full 9:16 crop filling the screen (instead of letterbox with blurred background)")
-    ap.add_argument("--min-score", type=float, default=1.5)
+    ap.add_argument("--crop", action="store_true", help="smart 9:16 crop; avoid persistent side facecams or isolate gameplay below a stacked facecam")
+    ap.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     ap.add_argument("--keep-minutes", type=int, default=30)
     ap.add_argument("--output-dir", default=None, help="override the output folder")
     a = ap.parse_args()
@@ -233,14 +390,20 @@ def main():
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 name = f"gta-{stamp}-{n_clips + 1}"
                 mp4 = os.path.join(out_dir, name + ".mp4")
-                if cut(c, words, start, a.clip_len, mp4, who.get("credit")):
+                crop_offset, source_roi = detect_smart_frame(c, start, a.clip_len) if a.crop else (0.5, None)
+                smart_crop = should_apply_smart_crop(a.crop, crop_offset, source_roi)
+                if cut(c, words, start, a.clip_len, mp4, who.get("credit"), crop=smart_crop,
+                       crop_offset=crop_offset, source_roi=source_roi):
                     n_clips += 1
                     text = " ".join(w[2] for w in words if start <= w[0] < start + a.clip_len)
                     with open(os.path.join(out_dir, name + ".json"), "w", encoding="utf-8") as meta:
                         json.dump({
                             "video": name + ".mp4", "channel": "gta", "source_url": a.url or a.file,
                             "streamer": who["name"], "credit": who.get("credit"), "stream_title": title,
-                            "score": score, "transcript": text, "title": None, "youtube_description": None,
+                            "score": score, "transcript": text, "framing": "smart-crop" if smart_crop else "full-gameplay",
+                            "crop_offset": crop_offset if smart_crop else None,
+                            "source_roi": list(source_roi) if source_roi else None,
+                            "title": None, "youtube_description": None,
                             "instagram_caption": None, "hashtags": [], "post_at": None,
                             "approved": False, "posted": {}, "test": who["test"],
                         }, meta, indent=2, ensure_ascii=False)
