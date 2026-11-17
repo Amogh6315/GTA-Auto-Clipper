@@ -116,6 +116,7 @@ def pick_moments(chunk_path, clip_len, top, min_score, lead_in=6):
             continue
         if any(abs(start - c[1]) < clip_len for c in chosen):
             continue
+        a, b = int(start / hop), int((start + clip_len) / hop)
         peak = (a + int(np.argmax(spike[a:b]))) * hop
         start = select_clip_start(peak, lead_in, clip_len, dur)
         # snap start to the nearest word start within 2 s so we never cut mid-word
@@ -150,17 +151,19 @@ def write_ass(path, words, start, length, credit):
     open(path, "w", encoding="utf-8").write(head + "\n".join(ev) + "\n")
 
 
-def build_video_filter(ass_name):
+def build_video_filter(ass_name, crop=False):
+    if crop:
+        return f"[0:v]scale=-2:1920,crop=1080:1920,setpts=PTS-STARTPTS,ass={ass_name}"
     return ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass=" + ass_name)
 
 
-def cut(chunk_path, words, start, length, out_mp4, credit):
+def cut(chunk_path, words, start, length, out_mp4, credit, crop=False):
     d = os.path.dirname(out_mp4)
     ass_name = "cap_" + os.path.basename(out_mp4) + ".ass"
     write_ass(os.path.join(d, ass_name), words, start, length, credit)
-    fg = build_video_filter(ass_name)
+    fg = build_video_filter(ass_name, crop=crop)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}",
                         "-i", os.path.abspath(chunk_path), "-t", f"{length}",
                         "-filter_complex", fg, "-af", "asetpts=PTS-STARTPTS",
@@ -187,6 +190,7 @@ def main():
     ap.add_argument("--lead-in", type=float, default=6,
                     help="seconds before the strongest audio peak to start each clip")
     ap.add_argument("--top", type=int, default=1, help="clips per chunk")
+    ap.add_argument("--crop", action="store_true", help="full 9:16 crop filling the screen (instead of letterbox with blurred background)")
     ap.add_argument("--min-score", type=float, default=1.5)
     ap.add_argument("--keep-minutes", type=int, default=30)
     ap.add_argument("--output-dir", default=None, help="override the output folder")
