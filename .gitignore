@@ -16,3 +16,5 @@ output/
 .DS_Store
 
 private/
+
+models/person_yolox_s_2022nov.onnx

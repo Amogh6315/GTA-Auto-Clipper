@@ -15,8 +15,8 @@ export async function onRequestGet({ request, env }) {
   if (!guide) return new Response('Guide delivery is temporarily unavailable.', { status: 503 });
   return new Response(guide, {
     headers: {
-      'content-type': 'application/pdf',
-      'content-disposition': 'attachment; filename="gta-creator-workflow.pdf"',
+      'content-type': 'application/zip',
+      'content-disposition': 'attachment; filename="GTA-Clipping-Guide-Premium.zip"',
       'cache-control': 'private, no-store',
     },
   });

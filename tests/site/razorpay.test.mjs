@@ -72,8 +72,8 @@ test('checkout creates a fixed-price Razorpay order and unlocks only a verified 
       request: new Request('https://example.test/api/download', { headers: { cookie } }),
     });
     assert.equal(file.status, 200);
-    assert.equal(file.headers.get('content-type'), 'application/pdf');
-    assert.equal(file.headers.get('content-disposition'), 'attachment; filename="gta-creator-workflow.pdf"');
+    assert.equal(file.headers.get('content-type'), 'application/zip');
+    assert.equal(file.headers.get('content-disposition'), 'attachment; filename="GTA-Clipping-Guide-Premium.zip"');
     assert.deepEqual(Buffer.from(await file.arrayBuffer()), guide);
   } finally {
     globalThis.fetch = previousFetch;
