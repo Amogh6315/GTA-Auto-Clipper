@@ -59,6 +59,7 @@ Important options:
 | `--layout` | `fill` | `fill`: gameplay covers the full 9:16 screen, facecams cropped out. `fit`: full source in the middle over a blurred background |
 | `--crop` | off | Old flag, same as `--layout fill` |
 | `--moment-source` | `chat` | Choose `chat`, `combined`, or `audio` for highlight selection |
+| `--spoken-language` | `auto` | `auto` detects the language and locks to Hindi (Hinglish captions) once a stream is clearly Hindi. `hi` / `en` force it for the whole stream |
 | `--no-chat` | off | Skip live-chat collection and use audio and speech only |
 | `--output-dir` | `output/` | Custom destination folder |
 
