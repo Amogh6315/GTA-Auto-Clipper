@@ -34,19 +34,20 @@ class ClipperReleaseTests(unittest.TestCase):
         self.assertTrue(graph.startswith('[0:v]crop=360:389:0:150,scale=1080:1920:force_original_aspect_ratio=increase'))
         self.assertNotIn('boxblur', graph)
 
-    def test_smart_crop_moves_away_from_a_persistent_left_facecam(self):
-        samples = [[(180, 90, 70, 70)] for _ in range(4)]
-        offset = choose_crop_offset(1920, 1080, samples)
-        self.assertGreater(offset, 0.5)
+    def test_corner_facecam_outside_the_centre_keeps_the_character_centred(self):
+        # Mythpat layout: facecam top-right, far from the centre crop -> stay centred, do not slide to the edge
+        self.assertEqual(choose_crop_offset(1280, 720, [[(1100, 40, 80, 90)] for _ in range(5)]), 0.5)
+        self.assertEqual(choose_crop_offset(1920, 1080, [[(180, 90, 70, 70)] for _ in range(4)]), 0.5)
 
-    def test_smart_crop_moves_away_from_a_persistent_right_facecam(self):
-        samples = [[(1670, 90, 70, 70)] for _ in range(4)]
-        offset = choose_crop_offset(1920, 1080, samples)
-        self.assertLess(offset, 0.5)
-
-    def test_smart_crop_uses_safe_center_without_repeated_side_face_detections(self):
-        self.assertEqual(choose_crop_offset(1920, 1080, [[(180, 90, 70, 70)]]), 0.5)
+    def test_in_game_faces_never_move_the_crop(self):
+        self.assertEqual(choose_crop_offset(1920, 1080, [[(1450, 300, 320, 420)] for _ in range(5)]), 0.5)
+        self.assertEqual(choose_crop_offset(1920, 1080, [[(1670, 430, 90, 95)] for _ in range(5)]), 0.5)
         self.assertEqual(choose_crop_offset(1920, 1080, [[], [], []]), 0.5)
+
+    def test_facecam_overlapping_the_centre_shifts_only_a_little(self):
+        offset = choose_crop_offset(1920, 1080, [[(1180, 60, 90, 95)] for _ in range(5)])
+        self.assertLess(offset, 0.5)
+        self.assertGreater(offset, 0.2)
 
     def test_portrait_stack_uses_gameplay_below_a_persistent_top_facecam(self):
         samples = [[(140, 30, 70, 60)] for _ in range(5)]

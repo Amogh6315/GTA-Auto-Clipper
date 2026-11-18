@@ -381,29 +381,34 @@ def write_ass(path, words, start, length, credit, caption_margin_v=400):
 
 
 def choose_crop_offset(frame_width, frame_height, face_samples):
-    """Return a normalized horizontal crop offset that avoids a persistent side facecam."""
+    """Keep the 9:16 crop centred: in third-person GTA the player character sits in the middle of the screen.
+    Only shift (by the smallest amount) when a persistent facecam overlay actually overlaps the centred crop.
+    Faces in the gameplay (NPCs, cutscenes) never move the crop."""
     if frame_width <= 0 or frame_height <= 0:
         return 0.5
     crop_width = frame_height * 9 / 16
     available = frame_width - crop_width
     if available <= 0:
         return 0.5
-
-    left_frames, right_frames = [], []
-    for detections in face_samples:
-        left = [box for box in detections if (box[0] + box[2] / 2) < frame_width * 0.38]
-        right = [box for box in detections if (box[0] + box[2] / 2) > frame_width * 0.62]
-        if left:
-            left_frames.append(left)
-        if right:
-            right_frames.append(right)
-
     threshold = max(3, math.ceil(len(face_samples) * 0.3))
-    if len(left_frames) >= threshold and len(right_frames) < threshold:
-        return 1.0
-    if len(right_frames) >= threshold and len(left_frames) < threshold:
-        return 0.0
-    return 0.5
+    small = [b for d in face_samples for b in d
+             if len(b) >= 4 and 0 < b[2] < frame_width * 0.12 and 0 < b[3] < frame_height * 0.22]
+    if len(small) < threshold:
+        return 0.5
+    cx = [b[0] + b[2] / 2 for b in small]
+    cy = [b[1] + b[3] / 2 for b in small]
+    mx, my = float(np.median(cx)), float(np.median(cy))
+    stable = all(abs(x - mx) <= frame_width * 0.04 and abs(y - my) <= frame_height * 0.06 for x, y in zip(cx, cy))
+    if not stable or frame_height * 0.25 <= my <= frame_height * 0.75:
+        return 0.5
+    # the webcam box is roughly 3x the detected face; does it reach into the centred crop?
+    half_cam = 1.5 * float(np.median([b[2] for b in small]))
+    cam_l, cam_r = mx - half_cam, mx + half_cam
+    left, right = available / 2, available / 2 + crop_width
+    if cam_r <= left or cam_l >= right:
+        return 0.5
+    x0 = cam_r if mx < frame_width / 2 else cam_l - crop_width   # slide just clear of the cam
+    return min(1.0, max(0.0, x0 / available))
 
 
 def choose_vertical_game_roi(frame_width, frame_height, face_samples, active_bottom=None):
