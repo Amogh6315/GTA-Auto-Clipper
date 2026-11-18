@@ -14,3 +14,11 @@
 .automation-includes a{color:var(--red-dark);font-weight:800}
 @media(max-width:800px){.automation-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){.automation-flow{padding:19px}.automation-steps{grid-template-columns:1fr 1fr;gap:7px}.automation-steps li{min-height:140px;padding:12px 10px}.automation-steps strong{font-size:12px}.automation-steps small{font-size:10px}.automation-includes{align-items:flex-start;flex-direction:column;gap:6px}}
+
+.nav-right{display:flex;align-items:center;gap:10px}
+.gh-icon{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border:1px solid #d7c9c1;border-radius:8px;background:#fff;color:#211d1c;font-size:13px;font-weight:800}
+.gh-icon:hover{background:#211d1c;color:#fff;border-color:#211d1c}
+.gh-svg{flex-shrink:0}
+.gh-buttons{display:flex;flex-wrap:wrap;gap:10px}
+.gh-buttons .button{gap:9px}
+@media(max-width:650px){.gh-icon span{display:none}.gh-icon{padding:8px 10px}}

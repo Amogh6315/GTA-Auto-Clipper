@@ -116,3 +116,7 @@ This release has no creator allowlist; the user chooses the source. You are resp
 ## License
 
 MIT. See [LICENSE](LICENSE). No OpenShorts application code or AutoCrop-Vertical code is bundled in this focused release.
+
+## Several streams, several AI agents, several channels
+
+See [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md) for the roles (capture runner, checker, editor), running one capture per stream, the checker's veto rules, and the YouTube/Instagram daily limits. Posting to many channels with an equal share: [GTA Auto Sender](https://github.com/AnIntellectualBeing/GTA-Auto-Sender).
