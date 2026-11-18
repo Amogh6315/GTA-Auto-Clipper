@@ -166,3 +166,24 @@ class PopCaptionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SpokenLanguageLockTest(unittest.TestCase):
+    def test_hindi_stream_locks_after_votes(self):
+        import clip
+        clip._forced_language = None
+        clip._lang_votes = {"hi": 2, "en": 1}
+        self.assertEqual(clip.locked_language(), "hi")
+
+    def test_english_stream_stays_auto(self):
+        import clip
+        clip._forced_language = None
+        clip._lang_votes = {"en": 5, "hi": 1}
+        self.assertIsNone(clip.locked_language())
+
+    def test_flag_forces(self):
+        import clip
+        clip._forced_language = "hi"
+        self.assertEqual(clip.locked_language(), "hi")
+        clip._forced_language = None
+        clip._lang_votes = {}

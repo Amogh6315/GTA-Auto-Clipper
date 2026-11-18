@@ -154,14 +154,36 @@ def contains_arabic_script(text):
                or "\u08a0" <= char <= "\u08ff" for char in text)
 
 
+# Language lock. Whisper guesses the language again for every 60 s chunk, and a Hindi streamer's chunk is sometimes
+# guessed as English (then the captions come out as English words). So: --spoken-language hi|en forces it, and in
+# auto mode the stream's own history decides: after 3 confident chunks, if half or more were Hindi, every later chunk
+# is transcribed as Hindi (-> Hinglish captions).
+_forced_language = None
+_lang_votes = {}
+LOCK_MIN_VOTES = 3
+LOCK_SHARE = 0.5
+
+
+def locked_language():
+    if _forced_language in ("hi", "en"):
+        return _forced_language
+    total = sum(_lang_votes.values())
+    if total >= LOCK_MIN_VOTES and _lang_votes.get("hi", 0) / total >= LOCK_SHARE:
+        return "hi"
+    return None
+
+
 def whisper_words(audio):
     global _model
     from faster_whisper import WhisperModel
     if _model is None:
         _model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, info = _model.transcribe(audio, word_timestamps=True, vad_filter=True, task="transcribe")
+    lock = locked_language()
+    segments, info = _model.transcribe(audio, word_timestamps=True, vad_filter=True, task="transcribe", language=lock)
     segments = list(segments)
     spoken_language = info.language or "unknown"
+    if lock is None and (getattr(info, "language_probability", 0) or 0) >= 0.6:
+        _lang_votes[spoken_language] = _lang_votes.get(spoken_language, 0) + 1
     raw_words = [(w.start, w.end, w.word.strip())
                  for segment in segments for w in (segment.words or [])]
     if spoken_language == "hi":
@@ -600,10 +622,15 @@ def main():
     ap.add_argument("--moment-source", choices=("chat", "combined", "audio"), default="chat",
                     help="rank by chat reactions (default), combine chat with audio/speech, or use audio/speech only")
     ap.add_argument("--no-chat", action="store_true", help="disable live chat signals and use audio/speech scoring only")
+    ap.add_argument("--spoken-language", choices=("auto", "en", "hi"), default="auto",
+                    help="auto (default): detect, and lock to Hindi once the stream is clearly Hindi (Hinglish captions); "
+                         "hi / en: force it for the whole stream")
     ap.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     ap.add_argument("--keep-minutes", type=int, default=30)
     ap.add_argument("--output-dir", default=None, help="override the output folder")
     a = ap.parse_args()
+    global _forced_language
+    _forced_language = None if a.spoken_language == "auto" else a.spoken_language
     if not a.url and not a.file:
         sys.exit(__doc__)
     if a.file and not a.test:
