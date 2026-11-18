@@ -398,24 +398,24 @@ def choose_crop_offset(frame_width, frame_height, face_samples):
     """Centre the 9:16 crop on the usual GTA third-person player anchor.
     Only shift further when a persistent facecam overlay overlaps that gameplay crop.
     Faces in the gameplay (NPCs, cutscenes) never move the crop."""
-    base = gameplay_crop_offset(frame_width, frame_height)
     if frame_width <= 0 or frame_height <= 0:
-        return base
+        return 0.5
     crop_width = frame_height * 9 / 16
     available = frame_width - crop_width
     if available <= 0:
-        return base
+        return 0.5
     threshold = max(3, math.ceil(len(face_samples) * 0.3))
     small = [b for d in face_samples for b in d
              if len(b) >= 4 and 0 < b[2] < frame_width * 0.12 and 0 < b[3] < frame_height * 0.22]
     if len(small) < threshold:
-        return base
+        return 0.5
     cx = [b[0] + b[2] / 2 for b in small]
     cy = [b[1] + b[3] / 2 for b in small]
     mx, my = float(np.median(cx)), float(np.median(cy))
     stable = all(abs(x - mx) <= frame_width * 0.04 and abs(y - my) <= frame_height * 0.06 for x, y in zip(cx, cy))
     if not stable or frame_height * 0.25 <= my <= frame_height * 0.75:
-        return base
+        return 0.5
+    base = gameplay_crop_offset(frame_width, frame_height)
     # the webcam box is roughly 3x the detected face; does it reach into the player-centred crop?
     half_cam = 1.5 * float(np.median([b[2] for b in small]))
     cam_l, cam_r = mx - half_cam, mx + half_cam

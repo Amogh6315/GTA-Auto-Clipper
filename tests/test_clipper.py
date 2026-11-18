@@ -48,10 +48,9 @@ class ClipperReleaseTests(unittest.TestCase):
         self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(180, 90, 70, 70)] for _ in range(4)]), gameplay_crop_offset(1920, 1080, 1920 * 0.38))
 
     def test_in_game_faces_never_move_the_crop(self):
-        expected = gameplay_crop_offset(1920, 1080, 1920 * 0.38)
-        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(1450, 300, 320, 420)] for _ in range(5)]), expected)
-        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(1670, 430, 90, 95)] for _ in range(5)]), expected)
-        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[], [], []]), expected)
+        self.assertEqual(choose_crop_offset(1920, 1080, [[(1450, 300, 320, 420)] for _ in range(5)]), 0.5)
+        self.assertEqual(choose_crop_offset(1920, 1080, [[(1670, 430, 90, 95)] for _ in range(5)]), 0.5)
+        self.assertEqual(choose_crop_offset(1920, 1080, [[], [], []]), 0.5)
 
     def test_facecam_overlapping_the_centre_shifts_only_a_little(self):
         offset = choose_crop_offset(1920, 1080, [[(1180, 60, 90, 95)] for _ in range(5)])
