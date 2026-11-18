@@ -97,12 +97,6 @@ For unattended posting, first make sure the AI agent is restricted to sources yo
 
 The publisher stores the Zernio post ID and an idempotency key in the metadata. If an API call fails, check the Zernio dashboard before retrying.
 
-## Website and Razorpay guide checkout
-
-The Pages site is in `site/`; its Functions create a fixed ₹149 Razorpay order, verify the checkout HMAC and captured payment on the server, and only then issue a short-lived download cookie. The buyer guide is stored as a Cloudflare Pages secret and is not part of the public GitHub repository or static asset directory. See [docs/RAZORPAY-SETUP.md](docs/RAZORPAY-SETUP.md) before configuring test or live keys.
-
-Checkout remains disabled until the Razorpay key ID, key secret, and guide-content secret are configured. Test mode must be used first. A test payment does not collect real money or mean the merchant account has been approved for live payments.
-
 ## Use with any AI assistant
 
 Copy [GTA-CLIPPING-PROMPT.txt](GTA-CLIPPING-PROMPT.txt) into ChatGPT, Claude, Gemini, or another AI assistant. The prompt itself needs no API key, plugin, or special setup. If your AI can access your video and run local tools, it can help operate the clipper; otherwise it will tell you what it can do and guide you one step at a time. Automatic clipping still needs the free tool installed. YouTube chat scoring uses the same optional YouTube API key as live search; without it, audio and speech scoring still works.
