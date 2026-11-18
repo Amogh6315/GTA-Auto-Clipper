@@ -27,7 +27,7 @@ test('hex signature comparison rejects malformed and unequal values', () => {
 test('checkout creates a fixed-price Razorpay order and unlocks only a verified capture', async () => {
   const previousFetch = globalThis.fetch;
   const secret = 'test_secret_never_for_production';
-  const guide = '# Private buyer guide';
+  const guide = Buffer.from('%PDF-1.7\nPrivate buyer guide');
   const env = {
     RAZORPAY_KEY_ID: 'rzp_test_example',
     RAZORPAY_KEY_SECRET: secret,
@@ -72,7 +72,9 @@ test('checkout creates a fixed-price Razorpay order and unlocks only a verified 
       request: new Request('https://example.test/api/download', { headers: { cookie } }),
     });
     assert.equal(file.status, 200);
-    assert.equal(await file.text(), guide);
+    assert.equal(file.headers.get('content-type'), 'application/pdf');
+    assert.equal(file.headers.get('content-disposition'), 'attachment; filename="gta-creator-workflow.pdf"');
+    assert.deepEqual(Buffer.from(await file.arrayBuffer()), guide);
   } finally {
     globalThis.fetch = previousFetch;
   }

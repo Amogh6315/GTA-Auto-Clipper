@@ -36,12 +36,12 @@ export function razorpayAuth(env) {
   return `Basic ${btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`)}`;
 }
 
-export async function guideText(env) {
+export async function guideBytes(env) {
   if (!env.GUIDE_CONTENT_GZIP_BASE64) return null;
   try {
     const bytes = Uint8Array.from(atob(env.GUIDE_CONTENT_GZIP_BASE64), (char) => char.charCodeAt(0));
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-    return await new Response(stream).text();
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   } catch {
     return null;
   }

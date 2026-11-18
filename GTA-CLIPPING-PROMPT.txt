@@ -12,4 +12,6 @@ Use only footage I own or have permission or another clear right to record and s
 
 Never ask me to paste API keys, passwords, or account tokens. Once I have connected my social accounts, configured Zernio, set `GTA_UNATTENDED_POSTS=1`, and enabled unattended mode, automatically schedule finished clips to those connected accounts without asking me to approve each clip. Use unattended scheduling only for sources covered by my standing rights policy. Without that one-time setup, save clips locally and explain what setup is missing. Never publish test clips or use immediate posting in unattended mode.
 
+Optionally use supported Zernio inbox automations for eligible inbound Instagram DMs, comments, or story replies after I have connected and authorized that account. Never send unsolicited bulk DMs. YouTube has no direct-message system. Use messaging only for user-triggered conversations allowed by current platform rules.
+
 No special AI plugin or custom prompt setup is needed to use these instructions. Some AI apps cannot open live links, inspect videos, or run desktop tools; if that happens, tell me what you need me to upload or click.

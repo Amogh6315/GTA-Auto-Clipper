@@ -1,9 +1,9 @@
 import {
-  constantTimeHexEqual, guideText, hmacHex, isPaymentCaptured, jsonResponse, razorpayAuth,
+  constantTimeHexEqual, guideBytes, hmacHex, isPaymentCaptured, jsonResponse, razorpayAuth,
 } from '../_lib/razorpay.mjs';
 
 export async function onRequestPost({ request, env }) {
-  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !await guideText(env)) {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !await guideBytes(env)) {
     return jsonResponse({ error: 'Guide delivery is being configured.' }, 503);
   }
   let body;

@@ -1,4 +1,4 @@
-import { constantTimeHexEqual, guideText, hmacHex } from '../_lib/razorpay.mjs';
+import { constantTimeHexEqual, guideBytes, hmacHex } from '../_lib/razorpay.mjs';
 
 export async function onRequestGet({ request, env }) {
   const token = (request.headers.get('cookie') || '').split('; ')
@@ -11,12 +11,12 @@ export async function onRequestGet({ request, env }) {
   if (!env.RAZORPAY_KEY_SECRET || !constantTimeHexEqual(expected, parts[2])) {
     return new Response('A verified purchase is required to download the guide.', { status: 401 });
   }
-  const guide = await guideText(env);
+  const guide = await guideBytes(env);
   if (!guide) return new Response('Guide delivery is temporarily unavailable.', { status: 503 });
   return new Response(guide, {
     headers: {
-      'content-type': 'text/markdown; charset=utf-8',
-      'content-disposition': 'attachment; filename="gta-auto-clipper-guide.md"',
+      'content-type': 'application/pdf',
+      'content-disposition': 'attachment; filename="gta-creator-workflow.pdf"',
       'cache-control': 'private, no-store',
     },
   });

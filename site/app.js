@@ -1,6 +1,5 @@
-const buyButton = document.querySelector('#buy-button');
+﻿const buyButton = document.querySelector('#buy-button');
 const statusLine = document.querySelector('#payment-status');
-const emailInput = document.querySelector('#buyer-email');
 document.querySelector('#year').textContent = new Date().getFullYear();
 
 function setStatus(message, error = false) {
@@ -13,23 +12,23 @@ fetch('/api/config').then((response) => response.json()).then((config) => {
   paymentConfig = config;
   if (config.enabled) {
     buyButton.disabled = false;
-    buyButton.innerHTML = 'Get the guide · ₹149 <b>↗</b>';
+    buyButton.innerHTML = 'Get the guide · ₹149 <span>→</span>';
     setStatus(config.mode === 'test' ? 'Test checkout is active. No real payment will be collected.' : 'Secure checkout · Instant guide download after payment.');
   } else {
     buyButton.disabled = true;
-    buyButton.textContent = 'Checkout setup in progress';
-    setStatus('Checkout is temporarily unavailable while the seller configures Razorpay.');
+    buyButton.textContent = 'Checkout is not active yet';
+    setStatus('Razorpay checkout is not active yet. For purchase help, contact anintellectualcompany.contact@gmail.com.');
   }
 }).catch(() => setStatus('Checkout status could not be loaded.', true));
 
 buyButton.addEventListener('click', async () => {
-  if (!emailInput.reportValidity() || !paymentConfig?.enabled || !window.Razorpay) return;
+  if (!paymentConfig?.enabled || !window.Razorpay) return;
   buyButton.disabled = true;
   setStatus('Starting secure checkout…');
   try {
     const response = await fetch('/api/create-order', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: emailInput.value.trim() }),
+      body: JSON.stringify({}),
     });
     const order = await response.json();
     if (!response.ok) throw new Error(order.error || 'Could not start checkout.');
@@ -40,8 +39,7 @@ buyButton.addEventListener('click', async () => {
       name: 'GTA Auto Clipper',
       description: 'AI Workflow + Prompt Pack',
       order_id: order.orderId,
-      prefill: { email: emailInput.value.trim() },
-      theme: { color: '#d6ff4f' },
+      theme: { color: '#b9e66b' },
       handler: async (payment) => {
         try {
           setStatus('Verifying payment securely…');
@@ -58,7 +56,7 @@ buyButton.addEventListener('click', async () => {
           buyButton.disabled = false;
         }
       },
-      modal: { ondismiss: () => { buyButton.disabled = false; setStatus('Checkout closed. You can try again whenever you’re ready.'); } },
+      modal: { ondismiss: () => { buyButton.disabled = false; setStatus('Checkout closed. You can try again whenever you are ready.'); } },
     });
     checkout.on('payment.failed', (event) => {
       setStatus(event.error?.description || 'Payment did not complete. No guide was unlocked.', true);

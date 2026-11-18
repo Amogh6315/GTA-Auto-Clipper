@@ -1,16 +1,12 @@
-import { GUIDE_AMOUNT_PAISE, guideText, jsonResponse, razorpayAuth } from '../_lib/razorpay.mjs';
+import { GUIDE_AMOUNT_PAISE, guideBytes, jsonResponse, razorpayAuth } from '../_lib/razorpay.mjs';
 
 export async function onRequestPost({ request, env }) {
-  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !await guideText(env)) {
+  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !await guideBytes(env)) {
     return jsonResponse({ error: 'Checkout is being configured. Please try again later.' }, 503);
   }
 
   let input;
   try { input = await request.json(); } catch { return jsonResponse({ error: 'Invalid request.' }, 400); }
-  const email = typeof input.email === 'string' ? input.email.trim().slice(0, 254) : '';
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return jsonResponse({ error: 'Enter a valid email address for delivery.' }, 400);
-  }
 
   const receipt = `gta${crypto.randomUUID().replaceAll('-', '').slice(0, 32)}`;
   try {
@@ -21,7 +17,7 @@ export async function onRequestPost({ request, env }) {
         amount: GUIDE_AMOUNT_PAISE,
         currency: 'INR',
         receipt,
-        notes: { product: 'gta-auto-clipper-guide', email },
+        notes: { product: 'gta-auto-clipper-guide' },
       }),
     });
     if (!upstream.ok) return jsonResponse({ error: 'Could not start checkout. Please try again.' }, 502);

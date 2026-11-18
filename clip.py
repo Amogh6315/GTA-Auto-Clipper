@@ -295,10 +295,12 @@ def caption_margin_for_video(video_path, crop=False, source_roi=None):
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
              "-of", "csv=s=x:p=0", video_path], capture_output=True, text=True,
         )
-        try:
-            source_width, source_height = (int(value) for value in probe.stdout.strip().split("x", 1))
+        dimensions = next((re.fullmatch(r"(\d+)x(\d+)", line.strip())
+                           for line in probe.stdout.splitlines() if line.strip()), None)
+        if dimensions:
+            source_width, source_height = (int(value) for value in dimensions.groups())
             panel_height = min(output_height, output_width * source_height / max(1, source_width))
-        except (ValueError, TypeError):
+        else:
             panel_height = output_height
     panel_top = max(0, (output_height - panel_height) / 2)
     caption_center = panel_top + panel_height * 0.76
