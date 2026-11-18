@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from clip import (
     write_ass,
-    build_video_filter, choose_crop_offset, choose_vertical_game_roi, reaction_score,
+    build_video_filter, choose_crop_offset, choose_vertical_game_roi, gameplay_crop_offset, reaction_score,
     should_apply_smart_crop,
     source_identity, select_clip_start,
     DEFAULT_MAX_SECONDS, pick_moments, mask_word, ytdlp_cmd,
@@ -34,15 +34,24 @@ class ClipperReleaseTests(unittest.TestCase):
         self.assertTrue(graph.startswith('[0:v]crop=360:389:0:150,scale=1080:1920:force_original_aspect_ratio=increase'))
         self.assertNotIn('boxblur', graph)
 
+    def test_gameplay_crop_centres_the_over_the_shoulder_player_anchor(self):
+        for width, height in ((1920, 1080), (640, 360)):
+            offset = gameplay_crop_offset(width, height, player_x=width * 0.38)
+            crop_width = height * 9 / 16
+            available = width - crop_width
+            crop_center = offset * available + crop_width / 2
+            self.assertAlmostEqual(crop_center, width * 0.38)
+
     def test_corner_facecam_outside_the_centre_keeps_the_character_centred(self):
-        # Mythpat layout: facecam top-right, far from the centre crop -> stay centred, do not slide to the edge
-        self.assertEqual(choose_crop_offset(1280, 720, [[(1100, 40, 80, 90)] for _ in range(5)]), 0.5)
-        self.assertEqual(choose_crop_offset(1920, 1080, [[(180, 90, 70, 70)] for _ in range(4)]), 0.5)
+        # A top-right facecam outside the player crop must not slide the crop to the edge.
+        self.assertAlmostEqual(choose_crop_offset(1280, 720, [[(1100, 40, 80, 90)] for _ in range(5)]), gameplay_crop_offset(1280, 720, 1280 * 0.38))
+        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(180, 90, 70, 70)] for _ in range(4)]), gameplay_crop_offset(1920, 1080, 1920 * 0.38))
 
     def test_in_game_faces_never_move_the_crop(self):
-        self.assertEqual(choose_crop_offset(1920, 1080, [[(1450, 300, 320, 420)] for _ in range(5)]), 0.5)
-        self.assertEqual(choose_crop_offset(1920, 1080, [[(1670, 430, 90, 95)] for _ in range(5)]), 0.5)
-        self.assertEqual(choose_crop_offset(1920, 1080, [[], [], []]), 0.5)
+        expected = gameplay_crop_offset(1920, 1080, 1920 * 0.38)
+        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(1450, 300, 320, 420)] for _ in range(5)]), expected)
+        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[(1670, 430, 90, 95)] for _ in range(5)]), expected)
+        self.assertAlmostEqual(choose_crop_offset(1920, 1080, [[], [], []]), expected)
 
     def test_facecam_overlapping_the_centre_shifts_only_a_little(self):
         offset = choose_crop_offset(1920, 1080, [[(1180, 60, 90, 95)] for _ in range(5)])
