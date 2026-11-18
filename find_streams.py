@@ -41,6 +41,11 @@ def find_streams(query, api_key, limit=25):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("query", nargs="?", default="GTA 6")
     parser.add_argument("--max", type=int, default=25, help="candidate count (maximum 50)")

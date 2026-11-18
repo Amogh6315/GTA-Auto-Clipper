@@ -12,7 +12,7 @@ from clip import (
     build_video_filter, choose_crop_offset, choose_vertical_game_roi, reaction_score,
     should_apply_smart_crop,
     source_identity, select_clip_start,
-    DEFAULT_MAX_SECONDS, pick_moments,
+    DEFAULT_MAX_SECONDS, pick_moments, mask_word, ytdlp_cmd,
 )
 
 
@@ -87,6 +87,24 @@ class ClipperReleaseTests(unittest.TestCase):
         self.assertEqual(len(set(starts)), 2)
         self.assertTrue(any(14 <= start <= 16 for start in starts), starts)
         self.assertTrue(any(54 <= start <= 56 for start in starts), starts)
+
+
+class CaptionAndDownloaderTests(unittest.TestCase):
+    def test_swear_words_are_masked_in_burned_captions(self):
+        self.assertEqual(mask_word("shit"), "s***")
+        self.assertEqual(mask_word("Fucking"), "F******")
+        self.assertEqual(mask_word("Lucia"), "Lucia")
+        self.assertEqual(mask_word("class"), "class")
+
+    def test_ytdlp_uses_node_when_deno_is_missing(self):
+        with patch("clip.shutil.which", side_effect=lambda name: "C:/node.exe" if name == "node" else None):
+            cmd = ytdlp_cmd("-g", "URL")
+        self.assertEqual(cmd[-4:], ["--js-runtimes", "node", "-g", "URL"])
+
+    def test_ytdlp_leaves_default_runtime_when_deno_exists(self):
+        with patch("clip.shutil.which", return_value="C:/deno.exe"):
+            cmd = ytdlp_cmd("-g", "URL")
+        self.assertNotIn("--js-runtimes", cmd)
 
 
 if __name__ == '__main__':

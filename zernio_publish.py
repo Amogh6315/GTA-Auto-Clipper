@@ -101,6 +101,11 @@ def upload_and_schedule(video_path, metadata_path, metadata, accounts, schedule,
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("clip", type=Path, help="clip path without extension or path to its .mp4/.json")
     parser.add_argument("--scheduled-for", help="ISO time with offset, for example 2026-11-18T12:00:00+05:30")

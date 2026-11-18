@@ -1,22 +1,26 @@
 # GTA Auto Clipper
 
-Find high-energy moments in live gameplay and render centered 9:16 clips with word-timed captions. The clipper runs on your computer. A separate Zernio command can schedule the finished clip to your connected YouTube and Instagram accounts.
+Find high-energy moments in live gameplay and render centered 9:16 clips with stable phrase captions and a word-by-word color highlight. The clipper runs on your computer. A separate Zernio command can schedule the finished clip to your connected YouTube and Instagram accounts.
 
 The software is free and MIT-licensed. The optional AI workflow guide and prompt pack are a separate digital product.
 
 ## What it does
 
 - Searches current YouTube live results for a phrase such as `GTA 6` and prints machine-readable JSON for AI agents.
-- Records a live source in rolling chunks, then ranks windows by audio peaks and stronger reaction phrases; repeated filler words such as “oh no” do not count as strong reactions.
-- Starts clips a few seconds before the strongest audio peak (6 seconds by default).
+- Requires an explicit visual confirmation before live capture, so a discussion stream or facecam-only source is not silently treated as gameplay.
+- Records a live source in rolling chunks. By default it ranks moments by live-chat reactions, then falls back to audio and speech if chat is unavailable or has no messages for a chunk. Combined chat, audio, and speech scoring is also available.
+- Starts clips a few seconds before the detected highlight (6 seconds by default).
+- Captions English speech in English and Hindi speech in romanized Hinglish. Other or uncertain languages, including Hindi the recognizer returns in an unsupported script, have no captions. Short phrase captions stay anchored in place while a color highlight follows the spoken words; source audio stays unchanged.
+- Places captions in the lower third of the visible gameplay panel instead of using one fixed position near the bottom of the full vertical canvas.
 - Preserves the full source frame by default, with a blurred fill. The optional `--crop` mode samples frames for facecams and shifts a vertical crop away from a persistent side facecam. It can also isolate gameplay below/above a facecam in a stacked portrait layout; uncertain detections fall back to the full source frame.
-- Resets audio and video timestamps before burning word-timed captions.
+- Resets audio and video timestamps before burning phrase-level karaoke captions.
+- Masks swear words and sexual words in the burned-in captions (for example `s***`) so platforms do not limit the clip; the original audio is unchanged.
 - Saves MP4 and JSON metadata in `output/`. It never posts as part of clipping.
-- Schedules one reviewed clip to YouTube and Instagram through Zernio; dry-run is the default.
+- Schedules reviewed clips through Zernio by default. Optional unattended scheduling is available after account setup and with a standing source-rights policy; dry-run is the default.
 
 ## Install
 
-Requirements: Python 3.10+, FFmpeg in PATH, OpenCV for `--crop` face detection, and a stable connection for first-run speech-model downloads.
+Requirements: Python 3.10+, FFmpeg in PATH, Node.js or Deno (yt-dlp needs a JavaScript runtime to read YouTube; the clipper uses Node automatically when Deno is missing), OpenCV for `--crop` face detection, and a stable connection for first-run speech-model downloads.
 
 ```powershell
 python -m venv .venv
@@ -24,7 +28,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-For live-stream search, set a YouTube Data API key in the terminal. Keep keys out of prompts, source files, and GitHub:
+For live-stream search and optional YouTube live-chat scoring, set a YouTube Data API key in the terminal. Keep keys out of prompts, source files, and GitHub:
 
 ```powershell
 $env:YOUTUBE_API_KEY = "YOUR_YOUTUBE_DATA_API_KEY"
@@ -35,10 +39,10 @@ The YouTube API returns live search candidates in `viewCount` order. It is not a
 
 ## Make clips
 
-Start live capture and keep it running until you press Ctrl+C. The clipper writes every selected highlight to `output/`:
+Open the candidate stream and verify that actual GTA gameplay is visible in the video. A GTA title, thumbnail, or talking head is not enough. Then start capture and keep it running until you press Ctrl+C. The default is chat-first. If chat is unavailable or has no messages for a chunk, the clipper automatically uses audio and speech instead. The clipper writes each selected highlight to `output/`:
 
 ```powershell
-python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" --max-seconds 0 --clip-len 30 --lead-in 6 --top 2
+python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" --gameplay-confirmed --max-seconds 0 --clip-len 30 --lead-in 6 --top 2
 ```
 
 Important options:
@@ -48,11 +52,16 @@ Important options:
 | `--max-seconds` | `0` | Capture duration; `0` runs until stopped |
 | `--chunk` | `90` | Analysis chunk size in seconds |
 | `--clip-len` | `30` | Rendered highlight length |
-| `--lead-in` | `6` | Seconds before the strongest audio peak |
+| `--lead-in` | `6` | Seconds before the detected moment |
 | `--top` | `1` | Highlights kept from each chunk |
+| `--gameplay-confirmed` | required for live capture | Confirm you inspected the stream and saw actual gameplay before recording |
 | `--min-score` | `2.5` | Minimum moment score |
-| `--crop` | off | Detect a persistent facecam and frame gameplay away from it; default framing keeps the full source visible |
+| `--crop` | off | Detect a persistent facecam and frame gameplay away from it; default framing keeps the full source visible with blurred fill |
+| `--moment-source` | `chat` | Choose `chat`, `combined`, or `audio` for highlight selection |
+| `--no-chat` | off | Skip live-chat collection and use audio and speech only |
 | `--output-dir` | `output/` | Custom destination folder |
+
+Examples: `--moment-source chat` uses chat reactions first; `--moment-source combined` scores chat, audio, and speech together; `--moment-source audio` uses the original audio and speech method. Chat mode falls back to audio and speech when it has no chat data.
 
 Test a local video first. Test output goes to `test_out/` and cannot be published:
 
@@ -92,9 +101,11 @@ The Pages site is in `site/`; its Functions create a fixed ₹149 Razorpay order
 
 Checkout remains disabled until the Razorpay key ID, key secret, and guide-content secret are configured. Test mode must be used first. A test payment does not collect real money or mean the merchant account has been approved for live payments.
 
-## Use with an AI agent
+## Use with any AI assistant
 
-Give the agent this project folder and ask it to follow [AI_WORKFLOW.md](AI_WORKFLOW.md). It can discover candidates, start the clipper, inspect `output/*.json`, draft metadata, and run the publisher in dry-run mode. It must not put secrets in the prompt. For reusable client instructions, see [AGENTS.md](AGENTS.md).
+Copy [GTA-CLIPPING-PROMPT.txt](GTA-CLIPPING-PROMPT.txt) into ChatGPT, Claude, Gemini, or another AI assistant. The prompt itself needs no API key, plugin, or special setup. If your AI can access your video and run local tools, it can help operate the clipper; otherwise it will tell you what it can do and guide you one step at a time. Automatic clipping still needs the free tool installed. YouTube chat scoring uses the same optional YouTube API key as live search; without it, audio and speech scoring still works.
+
+For an AI that can access this project folder, [AI_WORKFLOW.md](AI_WORKFLOW.md) gives the detailed tool workflow. Never paste credentials into a prompt.
 
 ## Rights and platform notes
 

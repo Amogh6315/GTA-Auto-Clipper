@@ -5,6 +5,7 @@ This command only records/renders. It never uploads or publishes.
 import argparse, glob, json, math, os, re, shutil, subprocess, sys, time
 from datetime import datetime
 import numpy as np
+from live_chat import create_live_chat_collector, score_chat_windows, summarize_chat_window
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(HERE, "output")
@@ -23,13 +24,24 @@ DEFAULT_MIN_SCORE = 2.5
 FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 
 
+def ytdlp_cmd(*args):
+    """yt-dlp needs a JavaScript runtime for YouTube; it only looks for deno by default, so fall back to node."""
+    cmd = [sys.executable, "-m", "yt_dlp"]
+    if not shutil.which("deno"):
+        for rt in ("node", "bun"):
+            if shutil.which(rt):
+                cmd += ["--js-runtimes", rt]
+                break
+    return cmd + list(args)
+
+
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
 # ---------- source info + permission gate ----------
 def stream_info(url):
-    r = run([sys.executable, "-m", "yt_dlp", "--dump-single-json", "--no-download", "--no-warnings", url])
+    r = run(ytdlp_cmd("--dump-single-json", "--no-download", "--no-warnings", url))
     if r.returncode:
         sys.exit("yt-dlp could not read that URL:\n" + r.stderr[-400:])
     return json.loads(r.stdout)
@@ -52,7 +64,7 @@ def start_recorder(url, file_, chunk, max_seconds, outdir):
     if file_:
         inputs = ["-i", file_]
     else:
-        r = run([sys.executable, "-m", "yt_dlp", "-g", "--no-warnings", "-f", "bv[height<=720]+ba/b[height<=720]/b", url])
+        r = run(ytdlp_cmd("-g", "--no-warnings", "-f", "bv[height<=720]+ba/b[height<=720]/b", url))
         lines = [l for l in r.stdout.splitlines() if l.startswith("http")]
         if r.returncode or not lines:
             sys.exit("could not get a stream URL:\n" + r.stderr[-400:])
@@ -67,19 +79,118 @@ def start_recorder(url, file_, chunk, max_seconds, outdir):
 
 # ---------- analysis ----------
 _model = None
+
+
+class WordTimings(list):
+    def __init__(self, words=(), spoken_language="unknown", caption_language="English",
+                 caption_fallback_reason=None):
+        super().__init__(words)
+        self.spoken_language = spoken_language or "unknown"
+        self.caption_language = caption_language
+        self.caption_fallback_reason = caption_fallback_reason
+
+
+_DEVANAGARI_CONSONANTS = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "ng",
+    "च": "ch", "छ": "chh", "ज": "j", "झ": "jh", "ञ": "ny",
+    "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh", "ण": "n",
+    "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n",
+    "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m",
+    "य": "y", "र": "r", "ल": "l", "व": "v", "श": "sh",
+    "ष": "sh", "स": "s", "ह": "h", "ळ": "l", "क़": "q",
+    "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh",
+    "फ़": "f",
+}
+_DEVANAGARI_VOWELS = {
+    "अ": "a", "आ": "aa", "इ": "i", "ई": "ee", "उ": "u", "ऊ": "oo",
+    "ऋ": "ri", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au",
+}
+_DEVANAGARI_MATRAS = {
+    "ा": "aa", "ि": "i", "ी": "ee", "ु": "u", "ू": "oo", "ृ": "ri",
+    "े": "e", "ै": "ai", "ो": "o", "ौ": "au",
+}
+_DEVANAGARI_VIRAMA = "्"
+
+
+def romanize_hindi(text):
+    """Render Hindi in familiar Latin letters for Hinglish captions."""
+    result = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in _DEVANAGARI_CONSONANTS:
+            consonant = char
+            if index + 1 < len(text) and text[index + 1] == "़" and char + "़" in _DEVANAGARI_CONSONANTS:
+                consonant = char + "़"
+                index += 1
+            result.append(_DEVANAGARI_CONSONANTS[consonant])
+            index += 1
+            if index < len(text) and text[index] in _DEVANAGARI_MATRAS:
+                result.append(_DEVANAGARI_MATRAS[text[index]])
+                index += 1
+            elif index < len(text) and text[index] == _DEVANAGARI_VIRAMA:
+                index += 1
+            else:
+                result.append("a")
+            continue
+        if char in _DEVANAGARI_VOWELS:
+            result.append(_DEVANAGARI_VOWELS[char])
+        elif char in {"ं", "ँ"}:
+            result.append("n")
+        elif char == "ः":
+            result.append("h")
+        elif char == "ऽ":
+            result.append("'")
+        elif char in {"।", "॥"}:
+            result.append(". ")
+        elif char != _DEVANAGARI_VIRAMA:
+            result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def contains_arabic_script(text):
+    return any("\u0600" <= char <= "\u06ff" or "\u0750" <= char <= "\u077f"
+               or "\u08a0" <= char <= "\u08ff" for char in text)
+
+
 def whisper_words(audio):
     global _model
     from faster_whisper import WhisperModel
     if _model is None:
-        _model = WhisperModel("base.en", device="cpu", compute_type="int8")
-    segs, _ = _model.transcribe(audio, word_timestamps=True, vad_filter=True, language="en")
-    return [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or [])]
+        _model = WhisperModel("base", device="cpu", compute_type="int8")
+    segments, info = _model.transcribe(audio, word_timestamps=True, vad_filter=True, task="transcribe")
+    segments = list(segments)
+    spoken_language = info.language or "unknown"
+    raw_words = [(w.start, w.end, w.word.strip())
+                 for segment in segments for w in (segment.words or [])]
+    if spoken_language == "hi":
+        if contains_arabic_script(" ".join(word for _, _, word in raw_words)):
+            return WordTimings(raw_words, spoken_language, "none",
+                               "Hindi recognition returned Arabic script; captions omitted")
+        words = [(start, end, romanize_hindi(word)) for start, end, word in raw_words]
+        return WordTimings(words, spoken_language, "Hinglish")
+    if spoken_language == "en":
+        return WordTimings(raw_words, spoken_language, "English")
+    reason = "Captions disabled for unsupported or uncertain language"
+    return WordTimings(raw_words, spoken_language, "none", reason)
 
 
 def load_audio(path):
     raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vn", "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
                          capture_output=True).stdout
     return np.frombuffer(raw, dtype=np.float32).copy()
+
+
+def media_duration(path):
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True,
+    )
+    try:
+        return max(0.0, float(result.stdout.strip()))
+    except ValueError:
+        return 0.0
 
 
 def rms_series(x, hop=0.25):
@@ -109,7 +220,8 @@ def select_clip_start(anchor, lead_in, clip_len, duration):
     return round(min(max(0.0, anchor - lead_in), latest), 2)
 
 
-def pick_moments(chunk_path, clip_len, top, min_score, lead_in=6):
+def pick_moments(chunk_path, clip_len, top, min_score, lead_in=6, chat_messages=None,
+                 moment_source="combined"):
     audio = load_audio(chunk_path)
     if len(audio) < 16000:
         return [], []
@@ -121,28 +233,42 @@ def pick_moments(chunk_path, clip_len, top, min_score, lead_in=6):
     dur = len(db) * hop
     if dur < clip_len:
         return [], words
+    starts = np.arange(0, dur - clip_len + 0.1, 5.0)
+    chat_scores = score_chat_windows(chat_messages or [], starts.tolist(), clip_len) if chat_messages else []
+    chat_by_start = {round(row["start"], 3): row for row in chat_scores}
     cands = []
-    for start in np.arange(0, dur - clip_len + 0.1, 5.0):
+    for start in starts:
         a, b = int(start / hop), int((start + clip_len) / hop)
         seg = np.sort(spike[a:b])
         loud = seg[-max(3, len(seg) // 10):].mean()
         ws = [w for w in words if start <= w[0] < start + clip_len]
         density = len(ws) / clip_len
         reaction = reaction_score(ws)
-        # A loud or talkative stretch alone is weak evidence of a shareable moment.
-        score = 0.45 * loud + 0.2 * min(density, 4.0) + 1.2 * reaction
+        chat_row = chat_by_start.get(round(float(start), 3))
+        # Chat mode ranks by viewer reactions; speech and sound remain for captions and fallback.
+        audio_score = 0.45 * loud + 0.2 * min(density, 4.0) + 1.2 * reaction
         if reaction == 0:
-            score *= 0.45
-        cands.append((score, start))
-    cands.sort(reverse=True)
+            audio_score *= 0.45
+        if moment_source == "chat":
+            score = 1.5 * chat_row["signal"] if chat_row else 0.0
+        elif moment_source == "audio":
+            score = audio_score
+        else:
+            score = audio_score + (0.85 * chat_row["signal"] if chat_row else 0.0)
+        cands.append((score, start, chat_row))
+    cands.sort(key=lambda item: (item[0], item[1]), reverse=True)
     chosen = []
-    for score, start in cands:
+    for score, start, chat_row in cands:
         if score < min_score or len(chosen) >= top:
             continue
         if any(abs(start - c[1]) < clip_len for c in chosen):
             continue
         a, b = int(start / hop), int((start + clip_len) / hop)
         peak = (a + int(np.argmax(spike[a:b]))) * hop
+        if moment_source == "chat" and chat_row:
+            peak = chat_row["peak_t"]
+        elif moment_source == "combined" and chat_row and chat_row["signal"] >= 1.2 and chat_row["peak_chatters"] >= 2:
+            peak = chat_row["peak_t"]
         start = select_clip_start(peak, lead_in, clip_len, dur)
         # snap start to the nearest word start within 2 s so we never cut mid-word
         near = [w[0] for w in words if abs(w[0] - start) <= 2]
@@ -156,21 +282,82 @@ def ass_time(t):
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def write_ass(path, words, start, length, credit):
+def caption_margin_for_video(video_path, crop=False, source_roi=None):
+    """Place captions near the lower third of visible gameplay, not the blurred canvas edge."""
+    output_width, output_height = 1080, 1920
+    if crop and not source_roi:
+        panel_height = output_height
+    elif source_roi:
+        _, _, source_width, source_height = source_roi
+        panel_height = min(output_height, output_width * source_height / max(1, source_width))
+    else:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+             "-of", "csv=s=x:p=0", video_path], capture_output=True, text=True,
+        )
+        try:
+            source_width, source_height = (int(value) for value in probe.stdout.strip().split("x", 1))
+            panel_height = min(output_height, output_width * source_height / max(1, source_width))
+        except (ValueError, TypeError):
+            panel_height = output_height
+    panel_top = max(0, (output_height - panel_height) / 2)
+    caption_center = panel_top + panel_height * 0.76
+    baseline_offset = 55
+    return max(100, min(1100, round(output_height - caption_center - baseline_offset)))
+
+
+# Burned-in captions: swear and sexual words are masked (F***) so platforms do not cut reach. The audio is unchanged.
+MASK_WORDS = {"fuck", "fucking", "fucked", "fucker", "motherfucker", "shit", "shitty", "bullshit", "bitch", "bitches",
+              "pussy", "dick", "cock", "cunt", "nigga", "niggas", "nigger", "whore", "slut", "porn", "sex", "sexy",
+              "ass", "asshole", "bastard", "boobs", "tits", "chutiya", "madarchod", "bhenchod", "behenchod", "bc", "mc",
+              "gandu", "randi", "lund", "bsdk"}
+
+
+def mask_word(w):
+    core = re.sub(r"[^a-z]", "", w.lower())
+    if core in MASK_WORDS or any(core.startswith(x) for x in ("fuck", "motherf", "shit", "nigg")):
+        return w[:1] + "*" * max(2, len(w) - 1)
+    return w
+
+
+def write_ass(path, words, start, length, credit, caption_margin_v=400):
     head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\n"
             "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-            "Style: Word,Arial,120,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,2,2,40,40,330,1\n"
+            f"Style: Word,Arial,68,&H0000FFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,1,2,72,72,{int(caption_margin_v)},1\n"
             "Style: Credit,Arial,44,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,1,8,40,40,150,1\n\n"
             "[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
     ev = []
     inside = [w for w in words if start <= w[0] < start + length]
-    for i, (s, e, w) in enumerate(inside):
-        t0 = s - start
-        t1 = (inside[i + 1][0] - start) if i + 1 < len(inside) else e - start
-        t1 = min(max(t1, t0 + 0.12), t0 + max(0.35, e - s + 0.25))  # don't hold a word through silence
-        txt = re.sub(r"[^\w'!?.,-]", "", w).upper()
-        if txt:
-            ev.append(f"Dialogue: 0,{ass_time(t0)},{ass_time(min(t1, length))},Word,,0,0,0,,{txt}")
+    caption_language = getattr(words, "caption_language", "English")
+    if caption_language in {"English", "Hinglish"}:
+        # Group words into stable short phrases. Karaoke fill changes color in place,
+        # so the caption does not jump around as each individual word is spoken.
+        groups, group = [], []
+        for item in inside:
+            s, e, w = item
+            clean = mask_word(re.sub(r"[^\w'!?.,-]", "", w)).upper()
+            if not clean:
+                continue
+            if group:
+                prev = group[-1]
+                pause = s - prev[1]
+                phrase_len = sum(len(part[2]) + 1 for part in group) + len(clean) + 1
+                if pause > 0.48 or len(group) >= 4 or phrase_len > 34 or re.search(r"[.!?]$", prev[2]):
+                    groups.append(group)
+                    group = []
+            group.append((s, e, clean))
+        if group:
+            groups.append(group)
+        for phrase in groups:
+            t0 = max(0.0, phrase[0][0] - start)
+            last_s, last_e, _ = phrase[-1]
+            t1 = min(length, max(t0 + 0.35, last_e - start + 0.12))
+            karaoke = []
+            for i, (s, e, txt) in enumerate(phrase):
+                next_s = phrase[i + 1][0] if i + 1 < len(phrase) else e
+                duration_cs = max(8, min(120, round((next_s - s) * 100)))
+                karaoke.append(f"{{\\kf{duration_cs}}}{txt}")
+            ev.append(f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},Word,,0,0,0,,{' '.join(karaoke)}")
     if credit:
         ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(4)},Credit,,0,0,0,,via {credit}")
     open(path, "w", encoding="utf-8").write(head + "\n".join(ev) + "\n")
@@ -316,10 +503,11 @@ def build_video_filter(ass_name, crop=False, crop_offset=0.5, source_roi=None):
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass=" + ass_name)
 
 
-def cut(chunk_path, words, start, length, out_mp4, credit, crop=False, crop_offset=0.5, source_roi=None):
+def cut(chunk_path, words, start, length, out_mp4, credit, crop=False, crop_offset=0.5,
+        source_roi=None, caption_margin_v=400):
     d = os.path.dirname(out_mp4)
     ass_name = "cap_" + os.path.basename(out_mp4) + ".ass"
-    write_ass(os.path.join(d, ass_name), words, start, length, credit)
+    write_ass(os.path.join(d, ass_name), words, start, length, credit, caption_margin_v)
     fg = build_video_filter(ass_name, crop=crop, crop_offset=crop_offset, source_roi=source_roi)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}",
                         "-i", os.path.abspath(chunk_path), "-t", f"{length}",
@@ -336,6 +524,11 @@ def cut(chunk_path, words, start, length, out_mp4, credit, crop=False, crop_offs
 
 # ---------- main loop ----------
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # Windows consoles default to cp1252
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("url", nargs="?")
     ap.add_argument("--file")
@@ -345,9 +538,14 @@ def main():
                     help="stop after N seconds; 0 keeps recording until Ctrl+C (default: 0)")
     ap.add_argument("--clip-len", type=int, default=30)
     ap.add_argument("--lead-in", type=float, default=6,
-                    help="seconds before the strongest audio peak to start each clip")
+                    help="seconds before the detected moment to start each clip")
     ap.add_argument("--top", type=int, default=1, help="clips per chunk")
+    ap.add_argument("--gameplay-confirmed", action="store_true",
+                    help="confirm you visually checked that the source shows actual GTA gameplay before a live capture")
     ap.add_argument("--crop", action="store_true", help="smart 9:16 crop; avoid persistent side facecams or isolate gameplay below a stacked facecam")
+    ap.add_argument("--moment-source", choices=("chat", "combined", "audio"), default="chat",
+                    help="rank by chat reactions (default), combine chat with audio/speech, or use audio/speech only")
+    ap.add_argument("--no-chat", action="store_true", help="disable live chat signals and use audio/speech scoring only")
     ap.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     ap.add_argument("--keep-minutes", type=int, default=30)
     ap.add_argument("--output-dir", default=None, help="override the output folder")
@@ -356,8 +554,17 @@ def main():
         sys.exit(__doc__)
     if a.file and not a.test:
         sys.exit("--file is only allowed with --test.")
+    if a.file:
+        a.file = os.path.abspath(a.file)
+        if not os.path.isfile(a.file):
+            sys.exit(f"Input file not found: {a.file}")
     if a.max_seconds < 0 or a.chunk < 1 or a.clip_len < 1 or a.top < 1:
         sys.exit("--max-seconds must be 0 or more; --chunk, --clip-len and --top must be positive.")
+    if a.url and not a.test and not a.gameplay_confirmed:
+        sys.exit("Live capture stopped: first inspect the source video and confirm actual GTA gameplay is visible. "
+                 "Then rerun with --gameplay-confirmed. A GTA title or facecam alone is not gameplay.")
+    if a.no_chat:
+        a.moment_source = "audio"
 
     if a.url:
         info = stream_info(a.url)
@@ -371,6 +578,18 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     wdir = os.path.join(WORK, datetime.now().strftime("%Y%m%d-%H%M%S"))
     print(f"source: {title!r} by {who['name']}  ->  {out_dir}")
+    print(f"moment finder: {a.moment_source} (chat mode falls back to audio/speech when chat is unavailable)")
+    chat = None
+    chat_source, chat_fallback = "disabled", None
+    if a.url and not a.test and a.moment_source != "audio":
+        chat, chat_source, chat_fallback = create_live_chat_collector(a.url, info.get("id"))
+        if chat:
+            chat.start()
+        else:
+            chat_source = "audio-speech-fallback"
+            print(f"live chat unavailable ({chat_fallback}); using audio/speech scoring")
+    else:
+            chat_fallback = "disabled by test mode or audio-only mode"
     rec = start_recorder(a.url, a.file, a.chunk, a.max_seconds, wdir)
     done, n_clips = set(), 0
     try:
@@ -385,22 +604,58 @@ def main():
                 continue
             c = todo[0]; done.add(c)
             print(f"analysing {os.path.basename(c)} ...")
-            moments, words = pick_moments(c, a.clip_len, a.top, a.min_score, a.lead_in)
+            chunk_length = media_duration(c)
+            chunk_end_epoch = os.path.getmtime(c)
+            chunk_start_epoch = chunk_end_epoch - chunk_length
+            absolute_chat = chat.messages_between(chunk_start_epoch, chunk_end_epoch) if chat else []
+            chunk_chat = [{"t": item["epoch"] - chunk_start_epoch,
+                           "user": item["user"], "text": item["text"]} for item in absolute_chat]
+            chunk_moment_source = a.moment_source
+            if chunk_moment_source in {"chat", "combined"} and not chunk_chat:
+                chunk_moment_source = "audio"
+                if a.moment_source == "chat" and chat:
+                    print("  no live chat messages for this chunk; using audio/speech instead")
+            moments, words = pick_moments(c, a.clip_len, a.top, a.min_score, a.lead_in,
+                                          chunk_chat, chunk_moment_source)
             for score, start in moments:
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 name = f"gta-{stamp}-{n_clips + 1}"
                 mp4 = os.path.join(out_dir, name + ".mp4")
                 crop_offset, source_roi = detect_smart_frame(c, start, a.clip_len) if a.crop else (0.5, None)
                 smart_crop = should_apply_smart_crop(a.crop, crop_offset, source_roi)
+                caption_margin_v = caption_margin_for_video(c, crop=smart_crop, source_roi=source_roi)
                 if cut(c, words, start, a.clip_len, mp4, who.get("credit"), crop=smart_crop,
-                       crop_offset=crop_offset, source_roi=source_roi):
+                       crop_offset=crop_offset, source_roi=source_roi,
+                       caption_margin_v=caption_margin_v):
                     n_clips += 1
                     text = " ".join(w[2] for w in words if start <= w[0] < start + a.clip_len)
+                    chat_summary = summarize_chat_window(chunk_chat, start, a.clip_len)
+                    if chunk_moment_source == "chat":
+                        selection_signals = ["live-chat"]
+                    elif chunk_moment_source == "combined":
+                        selection_signals = ["audio", "speech", "live-chat"]
+                    else:
+                        selection_signals = ["audio", "speech"]
                     with open(os.path.join(out_dir, name + ".json"), "w", encoding="utf-8") as meta:
                         json.dump({
                             "video": name + ".mp4", "channel": "gta", "source_url": a.url or a.file,
                             "streamer": who["name"], "credit": who.get("credit"), "stream_title": title,
-                            "score": score, "transcript": text, "framing": "smart-crop" if smart_crop else "full-gameplay",
+                            "score": score, "transcript": text,
+                            "spoken_language": getattr(words, "spoken_language", "unknown"),
+                            "caption_language": getattr(words, "caption_language", "English"),
+                            "caption_fallback_reason": getattr(words, "caption_fallback_reason", None),
+                            "caption_position": "lower-third-of-visible-gameplay",
+                            "framing": "smart-crop" if smart_crop else "full-source-blur-fill",
+                            "gameplay_confirmed": a.gameplay_confirmed,
+                            "moment_source_requested": a.moment_source,
+                            "moment_source_used": chunk_moment_source,
+                            "selection_signals": selection_signals,
+                            "live_chat_source": chat_source,
+                            "live_chat_status": chat.status if chat else "unavailable",
+                            "chat_fallback_reason": (chat.error if chat and chat.status == "unavailable" else chat_fallback) if not chat or chat.status == "unavailable" else None,
+                            "chat_message_count": chat_summary["message_count"],
+                            "unique_chatters": chat_summary["unique_chatters"],
+                            "reaction_chatters": chat_summary["reaction_chatters"],
                             "crop_offset": crop_offset if smart_crop else None,
                             "source_roi": list(source_roi) if source_roi else None,
                             "title": None, "youtube_description": None,
@@ -411,9 +666,13 @@ def main():
             for old in glob.glob(os.path.join(wdir, "chunk_*.ts")):
                 if old in done and time.time() - os.path.getmtime(old) > a.keep_minutes * 60:
                     os.remove(old)
+            if chat:
+                chat.discard_before(chunk_end_epoch - 5)
     except KeyboardInterrupt:
         print("stopping capture; finishing current work ...")
     finally:
+        if chat:
+            chat.stop()
         if rec.poll() is None:
             rec.terminate()
             try:
