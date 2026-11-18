@@ -1,6 +1,6 @@
 # GTA Auto Clipper
 
-Find high-energy moments in live gameplay and render centered 9:16 clips with stable phrase captions and a word-by-word color highlight. The clipper runs on your computer. A separate Zernio command can schedule the finished clip to your connected YouTube and Instagram accounts.
+Find high-energy moments in live gameplay and render full-screen 9:16 clips with pop-up captions: each word pops in yellow the moment it is spoken. The clipper runs on your computer. A separate Zernio command can schedule the finished clip to your connected YouTube and Instagram accounts.
 
 The software is free and MIT-licensed. The optional AI workflow guide and prompt pack are a separate digital product.
 
@@ -10,10 +10,10 @@ The software is free and MIT-licensed. The optional AI workflow guide and prompt
 - Requires an explicit visual confirmation before live capture, so a discussion stream or facecam-only source is not silently treated as gameplay.
 - Records a live source in rolling chunks. By default it ranks moments by live-chat reactions, then falls back to audio and speech if chat is unavailable or has no messages for a chunk. Combined chat, audio, and speech scoring is also available.
 - Starts clips a few seconds before the detected highlight (6 seconds by default).
-- Captions English speech in English and Hindi speech in romanized Hinglish. Other or uncertain languages, including Hindi the recognizer returns in an unsupported script, have no captions. Short phrase captions stay anchored in place while a color highlight follows the spoken words; source audio stays unchanged.
+- Captions English speech in English and Hindi speech in romanized Hinglish. Other or uncertain languages, including Hindi the recognizer returns in an unsupported script, have no captions. Captions are short one-line phrases (up to 3 words) at one fixed spot: each word pops in yellow when it is spoken, earlier words turn white, and the next phrase replaces the last one in the same place (never stacked). Source audio stays unchanged.
 - Places captions in the lower third of the visible gameplay panel instead of using one fixed position near the bottom of the full vertical canvas.
-- Preserves the full source frame by default, with a blurred fill. The optional `--crop` mode samples frames for facecams and shifts a vertical crop away from a persistent side facecam. It can also isolate gameplay below/above a facecam in a stacked portrait layout; uncertain detections fall back to the full source frame.
-- Resets audio and video timestamps before burning phrase-level karaoke captions.
+- Fills the whole 9:16 screen with gameplay by default (`--layout fill`), centered on the player. It samples frames for facecams, shifts the crop away from a persistent side facecam, and in stacked portrait streams cuts out the facecam and fills the screen with the gameplay part. `--layout fit` keeps the old look: the full source in the middle over a blurred background.
+- Resets audio and video timestamps before burning the captions.
 - Masks swear words and sexual words in the burned-in captions (for example `s***`) so platforms do not limit the clip; the original audio is unchanged.
 - Saves MP4 and JSON metadata in `output/`. It never posts as part of clipping.
 - Schedules reviewed clips through Zernio by default. Optional unattended scheduling is available after account setup and with a standing source-rights policy; dry-run is the default.
@@ -56,7 +56,8 @@ Important options:
 | `--top` | `1` | Highlights kept from each chunk |
 | `--gameplay-confirmed` | required for live capture | Confirm you inspected the stream and saw actual gameplay before recording |
 | `--min-score` | `2.5` | Minimum moment score |
-| `--crop` | off | Detect a persistent facecam and frame gameplay away from it; default framing keeps the full source visible with blurred fill |
+| `--layout` | `fill` | `fill`: gameplay covers the full 9:16 screen, facecams cropped out. `fit`: full source in the middle over a blurred background |
+| `--crop` | off | Old flag, same as `--layout fill` |
 | `--moment-source` | `chat` | Choose `chat`, `combined`, or `audio` for highlight selection |
 | `--no-chat` | off | Skip live-chat collection and use audio and speech only |
 | `--output-dir` | `output/` | Custom destination folder |

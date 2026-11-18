@@ -323,17 +323,18 @@ def mask_word(w):
 
 
 def write_ass(path, words, start, length, credit, caption_margin_v=400):
-    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\n"
+    """Pop-up captions: a short phrase (max 3 words, one line) sits at ONE fixed spot. Each word pops in when it is
+    spoken, in yellow with a small bounce; words already said turn white; words not yet said stay invisible, so the
+    line never shifts. Events never overlap in time (overlapping events make libass stack lines on top of each other)."""
+    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\n"
             "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-            f"Style: Word,Arial,68,&H0000FFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,5,1,2,72,72,{int(caption_margin_v)},1\n"
+            f"Style: Word,Arial Black,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,0,0,1,7,3,2,40,40,{int(caption_margin_v)},1\n"
             "Style: Credit,Arial,44,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,1,8,40,40,150,1\n\n"
             "[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
     ev = []
     inside = [w for w in words if start <= w[0] < start + length]
     caption_language = getattr(words, "caption_language", "English")
     if caption_language in {"English", "Hinglish"}:
-        # Group words into stable short phrases. Karaoke fill changes color in place,
-        # so the caption does not jump around as each individual word is spoken.
         groups, group = [], []
         for item in inside:
             s, e, w = item
@@ -342,24 +343,38 @@ def write_ass(path, words, start, length, credit, caption_margin_v=400):
                 continue
             if group:
                 prev = group[-1]
-                pause = s - prev[1]
-                phrase_len = sum(len(part[2]) + 1 for part in group) + len(clean) + 1
-                if pause > 0.48 or len(group) >= 4 or phrase_len > 34 or re.search(r"[.!?]$", prev[2]):
+                phrase_len = sum(len(part[2]) + 1 for part in group) + len(clean)
+                if s - prev[1] > 0.6 or len(group) >= 3 or phrase_len > 18 or re.search(r"[.!?]$", prev[2]):
                     groups.append(group)
                     group = []
             group.append((s, e, clean))
         if group:
             groups.append(group)
-        for phrase in groups:
-            t0 = max(0.0, phrase[0][0] - start)
-            last_s, last_e, _ = phrase[-1]
-            t1 = min(length, max(t0 + 0.35, last_e - start + 0.12))
-            karaoke = []
-            for i, (s, e, txt) in enumerate(phrase):
-                next_s = phrase[i + 1][0] if i + 1 < len(phrase) else e
-                duration_cs = max(8, min(120, round((next_s - s) * 100)))
-                karaoke.append(f"{{\\kf{duration_cs}}}{txt}")
-            ev.append(f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},Word,,0,0,0,,{' '.join(karaoke)}")
+        # one timeline of (t_on, t_off, phrase, index_of_spoken_word); t_off never passes the next t_on
+        steps = []
+        for gi, phrase in enumerate(groups):
+            phrase_end = phrase[-1][1] + 0.35
+            if gi + 1 < len(groups):
+                phrase_end = min(phrase_end, groups[gi + 1][0][0])
+            for i, (s, e, _) in enumerate(phrase):
+                t_off = phrase[i + 1][0] if i + 1 < len(phrase) else phrase_end
+                steps.append((s - start, t_off - start, phrase, i))
+        for t_on, t_off, phrase, i in steps:
+            t_on, t_off = max(0.0, t_on), min(float(length), t_off)
+            a_txt, b_txt = ass_time(t_on), ass_time(t_off)
+            if b_txt <= a_txt:
+                continue
+            parts = []
+            for j, (_, _, txt) in enumerate(phrase):
+                if j < i:
+                    parts.append(r"{\alpha&H00&\c&HFFFFFF&\fscx100\fscy100}" + txt)
+                elif j == i:
+                    parts.append(r"{\alpha&H00&\c&H00FFFF&\fscx118\fscy118\t(0,110,\fscx100\fscy100)}" + txt)
+                else:
+                    parts.append(r"{\alpha&HFF&\fscx100\fscy100}" + txt)
+            chars = sum(len(p[2]) for p in phrase) + len(phrase) - 1
+            fs = max(64, min(104, int(1000 / (0.74 * max(1, chars)))))   # big, but always one line on 1080 px
+            ev.append(f"Dialogue: 0,{a_txt},{b_txt},Word,,0,0,0,,{{\\fs{fs}}}{' '.join(parts)}")
     if credit:
         ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(4)},Credit,,0,0,0,,via {credit}")
     open(path, "w", encoding="utf-8").write(head + "\n".join(ev) + "\n")
@@ -488,29 +503,37 @@ def detect_smart_frame(video_path, start, length, sample_count=9):
     return choose_crop_offset(frame_width, frame_height, samples), roi
 
 
-def build_video_filter(ass_name, crop=False, crop_offset=0.5, source_roi=None):
-    if crop and source_roi:
+def build_video_filter(ass_name, crop=False, crop_offset=0.5, source_roi=None, layout="fit"):
+    """layout "fill" (default in the CLI): gameplay covers the whole 9:16 frame, centered (or shifted away from a
+    side facecam). layout "fit": the full source sits in the middle over a blurred copy (old look)."""
+    offset = min(1.0, max(0.0, float(crop_offset)))
+    if crop:
+        layout = "fill"
+    if layout == "fill":
+        pre = ""
+        if source_roi:
+            x, y, width, height = source_roi
+            pre = f"crop={width}:{height}:{x}:{y},"
+        return (f"[0:v]{pre}scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920:(iw-1080)*{offset:.4f}:(ih-1920)/2,"
+                f"setpts=PTS-STARTPTS,ass={ass_name}")
+    if source_roi:
         x, y, width, height = source_roi
         return (f"[0:v]crop={width}:{height}:{x}:{y},split[a][b];"
                 "[a]scale=1080:1920:force_original_aspect_ratio=increase,"
                 "crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass={ass_name}")
-    if crop:
-        offset = min(1.0, max(0.0, float(crop_offset)))
-        return ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920:(iw-1080)*{offset:.4f}:(ih-1920)/2,"
-                f"setpts=PTS-STARTPTS,ass={ass_name}")
     return ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2,setpts=PTS-STARTPTS,ass=" + ass_name)
 
 
 def cut(chunk_path, words, start, length, out_mp4, credit, crop=False, crop_offset=0.5,
-        source_roi=None, caption_margin_v=400):
+        source_roi=None, caption_margin_v=400, layout="fit"):
     d = os.path.dirname(out_mp4)
     ass_name = "cap_" + os.path.basename(out_mp4) + ".ass"
     write_ass(os.path.join(d, ass_name), words, start, length, credit, caption_margin_v)
-    fg = build_video_filter(ass_name, crop=crop, crop_offset=crop_offset, source_roi=source_roi)
+    fg = build_video_filter(ass_name, crop=crop, crop_offset=crop_offset, source_roi=source_roi, layout=layout)
     r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}",
                         "-i", os.path.abspath(chunk_path), "-t", f"{length}",
                         "-filter_complex", fg, "-af", "asetpts=PTS-STARTPTS",
@@ -544,7 +567,10 @@ def main():
     ap.add_argument("--top", type=int, default=1, help="clips per chunk")
     ap.add_argument("--gameplay-confirmed", action="store_true",
                     help="confirm you visually checked that the source shows actual GTA gameplay before a live capture")
-    ap.add_argument("--crop", action="store_true", help="smart 9:16 crop; avoid persistent side facecams or isolate gameplay below a stacked facecam")
+    ap.add_argument("--layout", choices=("fill", "fit"), default="fill",
+                    help="fill (default): gameplay covers the full 9:16 screen, centered and shifted away from a side "
+                         "facecam; fit: whole source in the middle over a blurred background")
+    ap.add_argument("--crop", action="store_true", help="same as --layout fill (kept for old commands)")
     ap.add_argument("--moment-source", choices=("chat", "combined", "audio"), default="chat",
                     help="rank by chat reactions (default), combine chat with audio/speech, or use audio/speech only")
     ap.add_argument("--no-chat", action="store_true", help="disable live chat signals and use audio/speech scoring only")
@@ -623,12 +649,13 @@ def main():
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 name = f"gta-{stamp}-{n_clips + 1}"
                 mp4 = os.path.join(out_dir, name + ".mp4")
-                crop_offset, source_roi = detect_smart_frame(c, start, a.clip_len) if a.crop else (0.5, None)
-                smart_crop = should_apply_smart_crop(a.crop, crop_offset, source_roi)
-                caption_margin_v = caption_margin_for_video(c, crop=smart_crop, source_roi=source_roi)
+                layout = "fill" if a.crop else a.layout
+                crop_offset, source_roi = detect_smart_frame(c, start, a.clip_len) if layout == "fill" else (0.5, None)
+                smart_crop = layout == "fill"
+                caption_margin_v = caption_margin_for_video(c, crop=smart_crop, source_roi=None if smart_crop else source_roi)
                 if cut(c, words, start, a.clip_len, mp4, who.get("credit"), crop=smart_crop,
                        crop_offset=crop_offset, source_roi=source_roi,
-                       caption_margin_v=caption_margin_v):
+                       caption_margin_v=caption_margin_v, layout=layout):
                     n_clips += 1
                     text = " ".join(w[2] for w in words if start <= w[0] < start + a.clip_len)
                     chat_summary = summarize_chat_window(chunk_chat, start, a.clip_len)
@@ -647,7 +674,7 @@ def main():
                             "caption_language": getattr(words, "caption_language", "English"),
                             "caption_fallback_reason": getattr(words, "caption_fallback_reason", None),
                             "caption_position": "lower-third-of-visible-gameplay",
-                            "framing": "smart-crop" if smart_crop else "full-source-blur-fill",
+                            "framing": "fill-9x16" if smart_crop else "full-source-blur-fill",
                             "gameplay_confirmed": a.gameplay_confirmed,
                             "moment_source_requested": a.moment_source,
                             "moment_source_used": chunk_moment_source,

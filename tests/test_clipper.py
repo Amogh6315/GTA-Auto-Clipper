@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from clip import (
+    write_ass,
     build_video_filter, choose_crop_offset, choose_vertical_game_roi, reaction_score,
     should_apply_smart_crop,
     source_identity, select_clip_start,
@@ -17,11 +18,21 @@ from clip import (
 
 
 class ClipperReleaseTests(unittest.TestCase):
-    def test_landscape_gameplay_stays_centered_without_cropping(self):
-        graph = build_video_filter('captions.ass')
+    def test_fit_layout_keeps_the_full_source_over_a_blurred_background(self):
+        graph = build_video_filter('captions.ass', layout='fit')
         self.assertIn('[b]scale=1080:-2[fg]', graph)
         self.assertIn('overlay=(W-w)/2:(H-h)/2', graph)
         self.assertIn('boxblur=30:5', graph)
+
+    def test_fill_layout_covers_the_whole_vertical_frame(self):
+        graph = build_video_filter('captions.ass', layout='fill')
+        self.assertIn('force_original_aspect_ratio=increase,crop=1080:1920:(iw-1080)*0.5000', graph)
+        self.assertNotIn('boxblur', graph)
+
+    def test_fill_layout_with_a_gameplay_roi_still_fills_the_screen(self):
+        graph = build_video_filter('captions.ass', layout='fill', source_roi=(0, 150, 360, 389))
+        self.assertTrue(graph.startswith('[0:v]crop=360:389:0:150,scale=1080:1920:force_original_aspect_ratio=increase'))
+        self.assertNotIn('boxblur', graph)
 
     def test_smart_crop_moves_away_from_a_persistent_left_facecam(self):
         samples = [[(180, 90, 70, 70)] for _ in range(4)]
@@ -105,6 +116,43 @@ class CaptionAndDownloaderTests(unittest.TestCase):
         with patch("clip.shutil.which", return_value="C:/deno.exe"):
             cmd = ytdlp_cmd("-g", "URL")
         self.assertNotIn("--js-runtimes", cmd)
+
+class PopCaptionTests(unittest.TestCase):
+    def _events(self, words):
+        import tempfile, os
+        from clip import WordTimings
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.ass")
+            write_ass(path, WordTimings(words, "en", "English"), 0, 30, None, 400)
+            return [l for l in open(path, encoding="utf-8").read().splitlines() if l.startswith("Dialogue: 0,")]
+
+    @staticmethod
+    def _secs(t):
+        h, m, s = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+
+    def test_words_pop_in_yellow_one_at_a_time_without_karaoke_sweep(self):
+        ev = self._events([(1.0, 1.3, "no"), (1.35, 1.6, "way"), (1.65, 2.0, "bro")])
+        self.assertEqual(len(ev), 3)
+        self.assertNotIn(r"\kf", "".join(ev))
+        self.assertIn(r"\c&H00FFFF&", ev[0].split("NO")[0])          # first word yellow when spoken
+        self.assertIn(r"\alpha&HFF&", ev[0].split("NO")[1])          # later words hidden until spoken
+        self.assertIn(r"\c&HFFFFFF&", ev[2].split("NO")[0])          # earlier words turn white
+
+    def test_caption_events_never_overlap_so_lines_never_stack(self):
+        words = [(i * 0.25, i * 0.25 + 0.6, w) for i, w in enumerate(
+            "what is happening right now this is insane look at that car go".split())]
+        ev = self._events(words)
+        spans = [(self._secs(e.split(",")[1]), self._secs(e.split(",")[2])) for e in ev]
+        for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+            self.assertLessEqual(a1, b0 + 1e-6)
+
+    def test_phrases_stay_short_enough_for_one_line(self):
+        ev = self._events([(i * 0.3, i * 0.3 + 0.25, w) for i, w in enumerate("absolutely unbelievable driving skills".split())])
+        for e in ev:
+            import re
+            visible = re.sub(r"\{[^}]*\}", "", e.split(",,", 2)[-1].split(",,")[-1])
+            self.assertLessEqual(len(visible), 24)
 
 
 if __name__ == '__main__':
