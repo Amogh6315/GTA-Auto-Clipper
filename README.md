@@ -95,6 +95,8 @@ python zernio_publish.py "output\gta-CLIP-ID" --scheduled-for "2026-11-18T12:00:
 
 For unattended posting, first make sure the AI agent is restricted to sources you have the right to use and that you have tested its output. Then set `GTA_UNATTENDED_POSTS=1` in the machine's private environment and run with `--publish --unattended`. A scheduled post already accepted by Zernio can publish while your computer is asleep. Discovery and clip rendering still require an awake, connected runner.
 
+`publish.py` is the same command as `zernio_publish.py`, but it also accepts the generic variable names `PUBLISH_API_KEY`, `PUBLISH_YOUTUBE_ACCOUNT_ID` and `PUBLISH_INSTAGRAM_ACCOUNT_ID`, so either spelling works: `python publish.py "output\gta-CLIP-ID" --publish --unattended --scheduled-for "FUTURE_ISO_TIME"`. To post to many channels with an equal share, use [GTA Auto Sender](https://github.com/AnIntellectualBeing/GTA-Auto-Sender).
+
 The publisher stores the Zernio post ID and an idempotency key in the metadata. If an API call fails, check the Zernio dashboard before retrying.
 
 ## Use with any AI assistant
