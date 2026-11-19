@@ -654,7 +654,7 @@ def main():
         who = source_identity(info, a.test)
         title = info.get("title", "")
     else:
-        who, title, info = source_identity({"uploader": "local source"}, True), os.path.basename(a.file), {}
+        who, title, info = source_identity({"uploader": "ReactingViralAI"}, True), os.path.basename(a.file), {}
     out_dir = os.path.abspath(a.output_dir) if a.output_dir else (TEST_OUT if who["test"] else OUTPUT_DIR)
     os.makedirs(out_dir, exist_ok=True)
     wdir = os.path.join(WORK, datetime.now().strftime("%Y%m%d-%H%M%S"))
