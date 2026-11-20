@@ -24,14 +24,22 @@ DEFAULT_MIN_SCORE = 2.5
 FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 
 
+
 def ytdlp_cmd(*args):
-    """yt-dlp needs a JavaScript runtime for YouTube; it only looks for deno by default, so fall back to node."""
+    """Build yt-dlp commands with JavaScript runtime and optional YouTube cookies."""
     cmd = [sys.executable, "-m", "yt_dlp"]
+
     if not shutil.which("deno"):
         for rt in ("node", "bun"):
             if shutil.which(rt):
                 cmd += ["--js-runtimes", rt]
                 break
+
+    cookies_file = os.path.join(HERE, "cookies.txt")
+
+    if os.path.isfile(cookies_file):
+        cmd += ["--cookies", cookies_file]
+
     return cmd + list(args)
 
 
@@ -403,18 +411,21 @@ def write_ass(path, words, start, length, credit, caption_margin_v=400):
 
 
 def gameplay_crop_offset(frame_width, frame_height, player_x=None):
-    """Return the crop offset that centres the usual over-the-shoulder GTA player position."""
+    """Return a centred 9:16 crop, optionally anchored around a detected subject."""
     if frame_width <= 0 or frame_height <= 0:
         return 0.5
+
     crop_width = frame_height * 9 / 16
     available = frame_width - crop_width
+
     if available <= 0:
         return 0.5
+
     if player_x is None:
-        player_x = frame_width * 0.38
+        return 0.5
+
     x0 = float(player_x) - crop_width / 2
     return min(1.0, max(0.0, x0 / available))
-
 
 def choose_crop_offset(frame_width, frame_height, face_samples):
     """Centre the 9:16 crop on the usual GTA third-person player anchor.
@@ -437,15 +448,21 @@ def choose_crop_offset(frame_width, frame_height, face_samples):
     stable = all(abs(x - mx) <= frame_width * 0.04 and abs(y - my) <= frame_height * 0.06 for x, y in zip(cx, cy))
     if not stable or frame_height * 0.25 <= my <= frame_height * 0.75:
         return 0.5
-    base = gameplay_crop_offset(frame_width, frame_height)
-    # the webcam box is roughly 3x the detected face; does it reach into the player-centred crop?
+    base = 0.5  # Generic content: start with a centred crop.
+
+    # The webcam box is roughly 3x the detected face.
     half_cam = 1.5 * float(np.median([b[2] for b in small]))
     cam_l, cam_r = mx - half_cam, mx + half_cam
+    
     left, right = available * base, available * base + crop_width
+    
+    # If the facecam is already outside the crop, keep the centred framing.
     if cam_r <= left or cam_l >= right:
         return base
-    player_x = frame_width * 0.38
-    x0 = cam_r if mx < player_x else cam_l - crop_width   # slide just clear of the cam
+    
+    # Move the crop away from the facecam.
+    x0 = cam_r if mx < frame_width / 2 else cam_l - crop_width
+    
     return min(1.0, max(0.0, x0 / available))
 
 
@@ -613,8 +630,8 @@ def main():
     ap.add_argument("--lead-in", type=float, default=6,
                     help="seconds before the detected moment to start each clip")
     ap.add_argument("--top", type=int, default=1, help="clips per chunk")
-    ap.add_argument("--gameplay-confirmed", action="store_true",
-                    help="confirm you visually checked that the source shows actual GTA gameplay before a live capture")
+    # ap.add_argument("--gameplay-confirmed", action="store_true",
+    #                 help="confirm you visually checked that the source shows actual GTA gameplay before a live capture")
     ap.add_argument("--layout", choices=("fill", "fit"), default="fill",
                     help="fill (default): gameplay covers the full 9:16 screen, centered and shifted away from a side "
                          "facecam; fit: whole source in the middle over a blurred background")
@@ -641,9 +658,9 @@ def main():
             sys.exit(f"Input file not found: {a.file}")
     if a.max_seconds < 0 or a.chunk < 1 or a.clip_len < 1 or a.top < 1:
         sys.exit("--max-seconds must be 0 or more; --chunk, --clip-len and --top must be positive.")
-    if a.url and not a.test and not a.gameplay_confirmed:
-        sys.exit("Live capture stopped: first inspect the source video and confirm actual GTA gameplay is visible. "
-                 "Then rerun with --gameplay-confirmed. A GTA title or facecam alone is not gameplay.")
+    # if a.url and not a.test and not a.gameplay_confirmed:
+    #     sys.exit("Live capture stopped: first inspect the source video and confirm actual GTA gameplay is visible. "
+    #              "Then rerun with --gameplay-confirmed. A GTA title or facecam alone is not gameplay.")
     if a.no_chat:
         a.moment_source = "audio"
 
@@ -700,15 +717,15 @@ def main():
                                           chunk_chat, chunk_moment_source)
             for score, start in moments:
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                name = f"gta-{stamp}-{n_clips + 1}"
+                name = f"clippilot-{stamp}-{n_clips + 1}"
                 mp4 = os.path.join(out_dir, name + ".mp4")
                 layout = "fill" if a.crop else a.layout
                 crop_offset, source_roi = detect_smart_frame(c, start, a.clip_len) if layout == "fill" else (0.5, None)
                 smart_crop = layout == "fill"
                 pan_keys = None
                 if smart_crop and source_roi is None:
-                    from player_track import track_player
-                    pan_keys = track_player(c, start, a.clip_len)
+                    from player_track import track_subject
+                    pan_keys = track_subject(c, start, a.clip_len)
                     if pan_keys is None:                  # driving / cutscene: the car sits mid-frame
                         crop_offset = 0.5
                 caption_margin_v = caption_margin_for_video(c, crop=smart_crop, source_roi=None if smart_crop else source_roi)
@@ -726,7 +743,7 @@ def main():
                         selection_signals = ["audio", "speech"]
                     with open(os.path.join(out_dir, name + ".json"), "w", encoding="utf-8") as meta:
                         json.dump({
-                            "video": name + ".mp4", "channel": "gta", "source_url": a.url or a.file,
+                            "video": name + ".mp4", "source_url": a.url or a.file,
                             "streamer": who["name"], "credit": who.get("credit"), "stream_title": title,
                             "score": score, "transcript": text,
                             "spoken_language": getattr(words, "spoken_language", "unknown"),
@@ -734,7 +751,7 @@ def main():
                             "caption_fallback_reason": getattr(words, "caption_fallback_reason", None),
                             "caption_position": "lower-third-of-visible-gameplay",
                             "framing": "fill-9x16" if smart_crop else "full-source-blur-fill",
-                            "gameplay_confirmed": a.gameplay_confirmed,
+                            # "gameplay_confirmed": a.gameplay_confirmed,
                             "moment_source_requested": a.moment_source,
                             "moment_source_used": chunk_moment_source,
                             "selection_signals": selection_signals,
